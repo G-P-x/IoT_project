@@ -120,11 +120,10 @@ MongoDB stores state, not behavior.
 - **Physically Attached**: I2C / SPI / UART
 
 ### Arduino ↔ Cloud
-- **Primary**: MQTT over TCP + TLS
+**MQTT over TCP + TLS**
   - `telemetry/batch` - Periodic sensor data
   - `telemetry/ondemand` - Requested real-time data
   - `health/event` - Status changes
-- **Alternative**: HTTPS (simpler, less efficient)
 
 ### Cloud ↔ Arduino (Commands)
 - **Method**: MQTT downlink (push-based, no polling)
@@ -135,62 +134,13 @@ MongoDB stores state, not behavior.
 
 ---
 
-## Getting Started
-
 ### Prerequisites
 - Python 3.8+
 - Flask
 - MongoDB
 - MQTT Broker (Mosquitto or similar)
 - Arduino with network connectivity
-
-### Installation
-
-1. **Clone the repository**
-```bash
-git clone <repository-url>
-cd IoT_project
-```
-
-2. **Install Python dependencies**
-```bash
-pip install -r requirements.txt
-```
-
-3. **Configure SSL certificates** (for HTTPS server)
-```powershell
-openssl req -x509 -newkey rsa:4096 -nodes -out cert.pem -keyout key.pem -days 365
-```
-
-4. **Start the HTTPS server**
-```bash
-python Servers/https_server.py
-```
-
-5. **Configure MongoDB connection** in application settings
-
-6. **Deploy Arduino firmware** with sensor drivers and MQTT client
-
----
-
-## Project Structure
-
-```
-IoT_project/
-├── README.md                 # This file
-├── requirements.txt          # Python dependencies
-├── project_design.txt        # Detailed design specifications
-├── LICENSE                   # License file
-└── Servers/
-    └── https_server.py       # Flask HTTPS server
-```
-
-### HTTPS Server (`Servers/https_server.py`)
-- REST API endpoints for data queries
-- Command submission interface
-- WebSocket/SSE for real-time updates (optional)
-- SSL/TLS encrypted communication
-
+   
 ---
 
 ## Design Decisions Explained
@@ -210,13 +160,23 @@ IoT_project/
 - On-demand mode provides real-time when needed
 - Event-driven approach is more efficient than continuous streaming
 
-### What Was Rejected
-- Direct user → sensor MQTT subscriptions (security, complexity)
-- Using missing telemetry for fault detection (unreliable)
-- All sensors permanently real-time (inefficient)
-- Bypassing Arduino/DT for "faster" paths (architectural integrity)
-
 ---
+
+## Getting Started
+
+### Clone GitHub repository
+1. **Clone the repository**
+```bash
+git clone <repository-url>
+cd IoT_project
+
+```
+2. **Install Python dependencies**
+```bash
+pip install -r requirements.txt
+```
+
+## Project Structure
 
 ## License
 See [LICENSE](LICENSE) for details.
