@@ -5,7 +5,6 @@ from pymongo.collection import Collection
 
 @dataclass(frozen=True)
 class Collections:
-    twins: Collection
     telemetry: Collection
     health: Collection
     commands: Collection
@@ -14,7 +13,9 @@ class Collections:
 
 class MongoDB:
     """
-    Minimal DB layer. Only connections + collection handles + indexes.
+    DB layer for a single Digital Twin.
+        - Uses MongoDB as the underlying database.
+        - Implements singleton pattern to ensure only one instance of MongoDB client is created and shared across the app.
     Business logic stays in dt_service.py.
     """
     _instance: "MongoDB" | None = None # _instance could be a singleton instance of MongoDB, eventually initialized with none.
@@ -30,7 +31,6 @@ class MongoDB:
         self._db = self._client[db_name]
 
         self.collections = Collections(
-            twins=self._db["twins"],
             telemetry=self._db["telemetry"],
             health=self._db["health"],
             commands=self._db["commands"],
@@ -45,18 +45,23 @@ class MongoDB:
         
         :param self: The MongoDB instance
         '''
-        # Telemetry query by twin_id + parameter(temperature, air quality, seismic waves) + time
+        # Telemetry query by parameter(temperature, air quality, seismic waves) + time
         self.collections.telemetry.create_index(
-            [("twin_id", ASCENDING), ("parameter", ASCENDING), ("t_acq", ASCENDING)]
+            [("parameter", ASCENDING), ("t_acq", ASCENDING)]
         )
+        # Telemetry query by sensor_id + time
+        self.collections.telemetry.create_index(
+            [("sensor_id", ASCENDING), ("t_acq", ASCENDING)]
+        )
+
         # Health query by twin_id + sensor_id + time
         self.collections.health.create_index(
-            [("twin_id", ASCENDING), ("sensor_id", ASCENDING), ("t_event", ASCENDING)]
+            [("sensor_id", ASCENDING), ("t_event", ASCENDING)]
         )
         # Commands query by command_id
         self.collections.commands.create_index([("command_id", ASCENDING)], unique=True)
-        # Twins by twin_id
-        self.collections.twins.create_index([("twin_id", ASCENDING)], unique=True)
+        # Anomalies by detected time
+        self.collections.anomalies.create_index([("t_detected", ASCENDING)])
 
     def close(self) -> None:
         self._client.close()
