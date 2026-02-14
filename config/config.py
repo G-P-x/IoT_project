@@ -8,6 +8,13 @@ class Config:
     FLASK_HOST = os.getenv("FLASK_HOST")
     FLASK_PORT = int(os.getenv("FLASK_PORT"))
     FLASK_DEBUG = os.getenv("FLASK_DEBUG", "False").lower() == "true"
+
+    # Telegram Bot (optional, for notifications)
+    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
+    TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
+    NGROK_AUTH_TOKEN = os.getenv("NGROK_AUTH_TOKEN", "")
+    WEBHOOK_PATH = "/telegram"
+    
     # MongoDB
     MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
     MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "etna_iot")

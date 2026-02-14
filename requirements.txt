@@ -3,7 +3,7 @@ blinker==1.9.0
 click==8.1.7
 colorama==0.4.6
 dnspython==2.7.0
-Flask==3.1.0
+Flask[async]==3.1.0
 Flask-Cors==5.0.0
 itsdangerous==2.2.0
 Jinja2==3.1.4
@@ -14,3 +14,8 @@ PyYAML==6.0.2
 uuid==1.30
 Werkzeug==3.1.3
 paho-mqtt==1.5.0
+
+# telegram additional requirements
+python-telegram-bot==21.9
+nest_asyncio
+pyngrok
