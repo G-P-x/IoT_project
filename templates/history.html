@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Historical Data - IoT Platform</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+    <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-date-fns"></script>
+</head>
+<body>
+    <nav class="navbar">
+        <div class="container">
+            <h1 class="logo">IoT Platform</h1>
+            <ul class="nav-menu">
+                <li><a href="/operator/home">Dashboard</a></li>
+                <li><a href="/operator/history" class="active">History</a></li>
+                <li><a href="/operator/commands">Commands</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <div class="container">
+        <section class="history-section">
+            <h2>Historical Data Viewer</h2>
+
+            <div class="filter-panel">
+                <div class="form-group">
+                    <label for="parameter">Parameter:</label>
+                    <select id="parameter" onchange="updateSensors()" required>
+                        <option value="" disabled selected>Select parameter</option>
+                        <option value="temperature">Temperature</option>
+                        <option value="air_quality">Air Quality</option>
+                        <option value="seismic_waves">Seismic Waves</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="sensor">Sensor:</label>
+                    <select id="sensor">
+                        <option value="" selected>All sensors</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="twinId">Twin ID:</label>
+                    <select id="twinId">
+                        <option value="etna_01" selected>etna_01</option>
+                    </select>
+                </div>
+
+                <div class="form-group">
+                    <label for="dateFrom">From:</label>
+                    <input type="datetime-local" id="dateFrom" />
+                </div>
+
+                <div class="form-group">
+                    <label for="dateTo">To:</label>
+                    <input type="datetime-local" id="dateTo" />
+                </div>
+
+                <button onclick="fetchHistory()" class="btn btn-primary">Fetch Data</button>
+                <button onclick="clearData()" class="btn btn-secondary">Clear</button>
+            </div>
+
+            <div id="loading" class="loading" style="display: none;">
+                <p>Loading data...</p>
+            </div>
+
+            <div id="errorMessage" class="error-message" style="display: none;"></div>
+
+            <div id="statsPanel" class="stats-panel" style="display: none;">
+                <h3>Statistics</h3>
+                <div class="stats-grid">
+                    <div class="stat">
+                        <span class="stat-label">Count</span>
+                        <span class="stat-value" id="statCount">0</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Average</span>
+                        <span class="stat-value" id="statAverage">-</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Min</span>
+                        <span class="stat-value" id="statMin">-</span>
+                    </div>
+                    <div class="stat">
+                        <span class="stat-label">Max</span>
+                        <span class="stat-value" id="statMax">-</span>
+                    </div>
+                </div>
+            </div>
+
+            <div id="chartContainer" style="display: none;">
+                <h3>Data Chart</h3>
+                <div class="chart-scroll" style="width: 100%; overflow-x: auto;">
+                    <div class="chart-wrapper" style="position: relative; height: 450px; min-width: 100%;">
+                        <canvas id="historyChart"></canvas>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        // Sensor mapping: parameter -> list of sensor IDs
+        const sensorsByParameter = {
+            temperature:    ['temp_01', 'temp_02'],
+            air_quality:    ['aq_01',   'aq_02'],
+            seismic_waves:  ['s_01',    's_02']
+        };
+
+        function updateSensors() {
+            const parameter = document.getElementById('parameter').value;
+            const sensorSelect = document.getElementById('sensor');
+            sensorSelect.innerHTML = '<option value="" selected>All sensors</option>';
+
+            const sensors = sensorsByParameter[parameter] || [];
+            sensors.forEach(s => {
+                const opt = document.createElement('option');
+                opt.value = s;
+                opt.textContent = s;
+                sensorSelect.appendChild(opt);
+            });
+        }
+
+        function fetchHistory() {
+            const parameter = document.getElementById('parameter').value;
+            const twinId = document.getElementById('twinId').value;
+            const sensor = document.getElementById('sensor').value;
+            const dateFrom = document.getElementById('dateFrom').value;
+            const dateTo = document.getElementById('dateTo').value;
+
+            if (!parameter) {
+                showError('Please select a parameter');
+                return;
+            }
+            if (!dateFrom || !dateTo) {
+                showError('Please select both From and To dates');
+                return;
+            }
+            if (new Date(dateFrom) >= new Date(dateTo)) {
+                showError('"From" date must be before "To" date');
+                return;
+            }
+
+            showLoading(true);
+            clearError();
+
+            let url = `/operator/history/${encodeURIComponent(parameter)}?from=${encodeURIComponent(dateFrom)}&to=${encodeURIComponent(dateTo)}`;
+            if (twinId) url += `&twin_id=${encodeURIComponent(twinId)}`;
+            if (sensor) url += `&sensor_id=${encodeURIComponent(sensor)}`;
+
+            fetch(url)
+                .then(response => {
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    return response.json();
+                })
+                .then(data => {
+                    displayData(data);
+                })
+                .catch(error => {
+                    showError('Error fetching data: ' + error.message);
+                })
+                .finally(() => {
+                    showLoading(false);
+                });
+        }
+
+        let chartInstance = null;
+
+        function displayData(data) {
+            if (!data || data.length === 0) {
+                showError('No data found for this parameter');
+                return;
+            }
+
+            if (data.length > 1500) {
+                showError(`Too many samples (${data.length}). Please select a shorter date range to keep the chart readable.`);
+                return;
+            }
+
+            // Sort by timestamp ascending
+            data.sort((a, b) => new Date(a.ts) - new Date(b.ts));
+
+            // Compute statistics
+            let sum = 0;
+            let min = Infinity;
+            let max = -Infinity;
+            let numericCount = 0;
+
+            data.forEach(record => {
+                const value = parseFloat(record.value);
+                if (!isNaN(value)) {
+                    sum += value;
+                    min = Math.min(min, value);
+                    max = Math.max(max, value);
+                    numericCount++;
+                }
+            });
+
+            const avg = numericCount > 0 ? (sum / numericCount).toFixed(2) : 'N/A';
+            document.getElementById('statCount').textContent = data.length;
+            document.getElementById('statAverage').textContent = isFinite(avg) ? avg : 'N/A';
+            document.getElementById('statMin').textContent = isFinite(min) ? min.toFixed(2) : 'N/A';
+            document.getElementById('statMax').textContent = isFinite(max) ? max.toFixed(2) : 'N/A';
+            document.getElementById('statsPanel').style.display = 'block';
+
+            // Group data by sensor_id for multiple lines
+            const sensorGroups = {};
+            data.forEach(record => {
+                const sid = record.sensor_id || 'unknown';
+                if (!sensorGroups[sid]) sensorGroups[sid] = [];
+                sensorGroups[sid].push({ x: new Date(record.ts), y: parseFloat(record.value) });
+            });
+
+            const colors = ['#3b82f6', '#ef4444', '#10b981', '#f59e0b', '#8b5cf6', '#ec4899'];
+            const datasets = Object.keys(sensorGroups).map((sid, i) => ({
+                label: sid,
+                data: sensorGroups[sid],
+                borderColor: colors[i % colors.length],
+                backgroundColor: colors[i % colors.length] + '22',
+                borderWidth: 2,
+                pointRadius: 3,
+                tension: 0.3,
+                fill: false
+            }));
+
+            const unit = data[0]?.unit || '';
+            const paramLabel = document.getElementById('parameter').value;
+
+            // Destroy previous chart and replace canvas
+            if (chartInstance) chartInstance.destroy();
+            const wrapper = document.querySelector('.chart-wrapper');
+            wrapper.innerHTML = '<canvas id="historyChart"></canvas>';
+
+            // Compute dynamic width: minimum 40px per unique timestamp
+            const uniqueTimestamps = new Set(data.map(r => r.ts)).size;
+            const minSpacing = 40; // px per data point
+            const containerWidth = document.querySelector('.chart-scroll').clientWidth;
+            const chartWidth = Math.max(containerWidth, uniqueTimestamps * minSpacing);
+            wrapper.style.width = chartWidth + 'px';
+
+            const canvas = document.getElementById('historyChart');
+            canvas.width = chartWidth;
+            canvas.height = 450;
+
+            const ctx = canvas.getContext('2d');
+            chartInstance = new Chart(ctx, {
+                type: 'line',
+                data: { datasets },
+                options: {
+                    responsive: false,
+                    maintainAspectRatio: false,
+                    interaction: { mode: 'index', intersect: false },
+                    plugins: {
+                        title: {
+                            display: true,
+                            text: `${paramLabel} over time`,
+                            font: { size: 16 }
+                        },
+                        tooltip: {
+                            callbacks: {
+                                label: ctx => `${ctx.dataset.label}: ${ctx.parsed.y} ${unit}`
+                            }
+                        }
+                    },
+                    scales: {
+                        x: {
+                            type: 'time',
+                            time: {
+                                tooltipFormat: 'dd MMM yyyy, HH:mm',
+                                displayFormats: {
+                                    minute: 'HH:mm',
+                                    hour: 'dd MMM HH:mm',
+                                    day: 'dd MMM yyyy'
+                                }
+                            },
+                            title: { display: true, text: 'Time' }
+                        },
+                        y: {
+                            title: { display: true, text: `${paramLabel} (${unit})` }
+                        }
+                    }
+                }
+            });
+
+            document.getElementById('chartContainer').style.display = 'block';
+        }
+
+        function clearData() {
+            if (chartInstance) { chartInstance.destroy(); chartInstance = null; }
+            document.getElementById('statsPanel').style.display = 'none';
+            document.getElementById('chartContainer').style.display = 'none';
+            document.getElementById('parameter').value = '';
+            document.getElementById('sensor').innerHTML = '<option value="" selected>All sensors</option>';
+            document.getElementById('dateFrom').value = '';
+            document.getElementById('dateTo').value = '';
+            clearError();
+        }
+
+        function showLoading(show) {
+            document.getElementById('loading').style.display = show ? 'block' : 'none';
+        }
+
+        function showError(message) {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+        }
+
+        function clearError() {
+            document.getElementById('errorMessage').style.display = 'none';
+        }
+
+
+    </script>
+</body>
+</html>

@@ -1,0 +1,181 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Send Commands - IoT Platform</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="container">
+            <h1 class="logo">IoT Platform</h1>
+            <ul class="nav-menu">
+                <li><a href="/operator/home">Dashboard</a></li>
+                <li><a href="/operator/history">History</a></li>
+                <li><a href="/operator/commands" class="active">Commands</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <div class="container">
+        <section class="commands-section">
+            <h2>Send Command</h2>
+
+            <div id="errorMessage" class="error-message" style="display: none;"></div>
+            <div id="successMessage" class="success-message" style="display: none;"></div>
+
+            <form id="commandForm" class="command-form">
+                <fieldset>
+                    <legend>Command Details</legend>
+
+                    <div class="form-group">
+                        <label for="twinId">Twin ID:</label>
+                        <input type="text" id="twinId" placeholder="Leave empty for default" />
+                    </div>
+
+                    <div class="form-group">
+                        <label for="issuedBy">Issued By (Operator ID):</label>
+                        <input type="text" id="issuedBy" placeholder="e.g., operator_1, researcher_5" required />
+                    </div>
+
+                    <div class="form-group">
+                        <label for="sensorId">Sensor ID:</label>
+                        <input type="text" id="sensorId" placeholder="e.g., t1, s2" required />
+                    </div>
+
+                    <div class="form-group">
+                        <label for="commandId">Command ID:</label>
+                        <input type="text" id="commandId" placeholder="e.g., cmd_01 (sample)" required />
+                    </div>
+
+                </fieldset>
+
+                <div class="form-actions">
+                    <button type="submit" class="btn btn-primary">Send Command</button>
+                    <button type="reset" class="btn btn-secondary">Clear Form</button>
+                </div>
+            </form>
+
+            <div id="loading" class="loading" style="display: none;">
+                <p>Sending command...</p>
+            </div>
+
+            <div id="responsePanel" style="display: none;">
+                <h3>Response</h3>
+                <div id="responseContent" class="response-content"></div>
+            </div>
+
+            <div class="info-panel">
+                <h3>Command Format</h3>
+                <p>Each command targets a specific sensor parameter on a digital twin.</p>
+                <pre><code>{
+    target: {
+        "twin_id": "etna_01",
+        "sensor_id": "temp_01"
+    },
+    command_id: "cmd_01",
+    operator_id: "operator_01"
+}</code></pre>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        function getTwinId() {
+            const input = document.getElementById('twinId').value.trim();
+            return input || localStorage.getItem('twinId') || null;
+        }
+
+        function showLoading(show) {
+            document.getElementById('loading').style.display = show ? 'block' : 'none';
+        }
+
+        function showError(message) {
+            const errorDiv = document.getElementById('errorMessage');
+            errorDiv.textContent = message;
+            errorDiv.style.display = 'block';
+            document.getElementById('successMessage').style.display = 'none';
+        }
+
+        function showSuccess(message) {
+            const successDiv = document.getElementById('successMessage');
+            successDiv.textContent = message;
+            successDiv.style.display = 'block';
+            document.getElementById('errorMessage').style.display = 'none';
+        }
+
+        function clearMessages() {
+            document.getElementById('errorMessage').style.display = 'none';
+            document.getElementById('successMessage').style.display = 'none';
+        }
+
+        // called when the event 'submit' fires (clicking on Send Command button)
+        document.getElementById('commandForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            clearMessages();
+
+            const sensorId = document.getElementById('sensorId').value.trim();
+            const commandId = document.getElementById('commandId').value.trim();
+            const issuedBy = document.getElementById('issuedBy').value.trim();
+            const twinId = getTwinId();
+
+            if (!sensorId || !commandId || !issuedBy) {
+                showError('Please fill in all required fields');
+                return;
+            }
+
+            const payload = {
+                target: {
+                    twin_id: twinId,
+                    sensor_id: sensorId
+                },
+                command_id: commandId,
+                issued_by: issuedBy,
+            };
+
+            showLoading(true);
+
+            const url = `/operator/commands/send`;
+            fetch(url, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(payload)
+            })
+                .then(response => {
+                    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+                    return response.json();
+                })
+                .then(data => {
+                    showSuccess(`Command sent successfully! Command ID: ${data.command_id}`);
+                    displayResponse(data);
+                    document.getElementById('commandForm').reset();
+                })
+                .catch(error => {
+                    showError('Error sending command: ' + error.message);
+                })
+                .finally(() => {
+                    showLoading(false);
+                });
+        });
+
+        function displayResponse(data) {
+            const responseContent = document.getElementById('responseContent');
+            responseContent.innerHTML = `
+                <pre><code>${JSON.stringify(data, null, 2)}</code></pre>
+            `;
+            document.getElementById('responsePanel').style.display = 'block';
+        }
+
+        // Load saved twin ID on page load
+        window.addEventListener('load', function() {
+            const savedTwinId = localStorage.getItem('twinId');
+            if (savedTwinId) {
+                document.getElementById('twinId').value = savedTwinId;
+            }
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>IoT Dashboard - Operator & Researcher Interface</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="container">
+            <h1 class="logo">IoT Platform</h1>
+            <ul class="nav-menu">
+                <li><a href="/operator/home" class="active">Dashboard</a></li>
+                <li><a href="/operator/history">History</a></li>
+                <li><a href="/templates/commands">Commands</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <div class="container">
+        <section class="dashboard">
+            <h2>Dashboard</h2>
+            
+            <div class="config-section">
+                <h3>Configuration</h3>
+                <form id="configForm">
+                    <div class="form-group">
+                        <label for="twinId">Twin ID:</label>
+                        <input type="text" id="twinId" name="twinId" placeholder="Leave empty for default" />
+                    </div>
+                    <button type="submit" class="btn">Set Configuration</button>
+                </form>
+            </div>
+
+            <div class="grid">
+                <div class="card">
+                    <h3>View Historical Data</h3>
+                    <p>Monitor parameter history and trends for your digital twins.</p>
+                    <a href="/operator/history" class="btn btn-primary">View History</a>
+                </div>
+
+                <div class="card">
+                    <h3>Send Commands</h3>
+                    <p>Issue commands to sensors and devices connected to your digital twins.</p>
+                    <a href="/operator/commands" class="btn btn-primary">Send Command</a>
+                </div>
+
+                <div class="card">
+                    <h3>API Documentation</h3>
+                    <p>Learn about available API endpoints and their usage.</p>
+                    <button onclick="toggleApiDocs()" class="btn btn-secondary">View Docs</button>
+                </div>
+            </div>
+
+            <div id="apiDocs" class="api-docs" style="display: none;">
+                <h3>API Endpoints</h3>
+                <div class="endpoint">
+                    <h4>GET /operator/history/&lt;parameter&gt;</h4>
+                    <p><strong>Query Parameters:</strong></p>
+                    <ul>
+                        <li><code>twin_id</code> - (optional) ID of the digital twin</li>
+                        <li><code>limit</code> - (optional) Maximum records to return (default: 200)</li>
+                    </ul>
+                </div>
+
+                <div class="endpoint">
+                    <h4>POST /commands</h4>
+                    <p><strong>Query Parameters:</strong></p>
+                    <ul>
+                        <li><code>twin_id</code> - (optional) ID of the digital twin</li>
+                    </ul>
+                    <p><strong>Request Body:</strong></p>
+                    <pre><code>{
+  "target": {"sensor_id": "t1", "parameter": "temperature"},
+  "issued_by": "operator_id",
+  "timeout_ms": 2000
+}</code></pre>
+                </div>
+            </div>
+        </section>
+    </div>
+
+    <script>
+        function toggleApiDocs() {
+            const docs = document.getElementById('apiDocs');
+            docs.style.display = docs.style.display === 'none' ? 'block' : 'none';
+        }
+
+        document.getElementById('configForm').addEventListener('submit', function(e) {
+            e.preventDefault();
+            const twinId = document.getElementById('twinId').value;
+            if (twinId) {
+                localStorage.setItem('twinId', twinId);
+                alert('Configuration saved: Twin ID = ' + twinId);
+            } else {
+                localStorage.removeItem('twinId');
+                alert('Configuration reset to default');
+            }
+        });
+
+        // Load saved configuration on page load
+        window.addEventListener('load', function() {
+            const savedTwinId = localStorage.getItem('twinId');
+            if (savedTwinId) {
+                document.getElementById('twinId').value = savedTwinId;
+            }
+        });
+    </script>
+</body>
+</html>
