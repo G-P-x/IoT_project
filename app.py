@@ -1,8 +1,6 @@
 from flask import Flask
 from flask_cors import CORS
-import telegram
 
-from cloud_platform.application.mqtt_handler import VolcanoMQTTHandler
 from cloud_platform.telegram_bot.handlers.base_handlers import echo_handler, help_handler, start_handler
 from config.config import Config
 import asyncio
@@ -63,17 +61,8 @@ class FlaskServer:
         self.cfg = cfg
         self.app = Flask(__name__, template_folder=cfg.TEMPLATES_DIR, static_folder=cfg.STATIC_DIR)
         CORS(self.app)  # Enable CORS for all routes
-        self.mqtt_handler = VolcanoMQTTHandler(self.app)
         self._register_blueprints(telegram_application)
 
-    def _initialise_mqtt_handler(self):
-        self.app.config['MQTT_CONFIG'] = {
-            'BROKER': self.cfg.MQTT_BROKER,
-            'PORT': self.cfg.MQTT_PORT,
-            'TOPIC_TELEMETRY': self.cfg.TOPIC_TELEMETRY,
-            'TOPIC_HEALTH': self.cfg.TOPIC_HEALTH,
-            'TOPIC_PUB': self.cfg.TOPIC_PUB,
-        }
     def _register_blueprints(self, telegram_application=None):
         register_operator_routes(self.app)
         init_routes(self.app, telegram_application)
