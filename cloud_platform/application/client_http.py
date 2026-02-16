@@ -175,5 +175,115 @@ def send_command_to_all_devices(command, sensors=None, device_ids=None, twin_id=
     return results
 
 if __name__ == "__main__":
-    # Testing the client_http module
-    print("Testing client_http module...")
+    ## IMPORTANT: this test code is meant to be run as a standalone script to test the client_http module in isolation.
+    # Since it doesn't know about the project root, you should run it as a module from the project root like this:
+    # -> on the terminal run ->    python -m cloud_platform.application.client_http
+
+    import json
+    import os
+    from unittest.mock import patch, MagicMock
+
+    # ── Load mock data ────────────────────────────────────────────────
+    mock_file = os.path.join(os.path.dirname(__file__), "mock_edge_responses.json")
+    with open(mock_file, "r") as f:
+        mock_data = json.load(f)    # {device_id: response_body | null, …}
+
+    def mock_post(url, json=None, timeout=None):
+        """
+        Replace requests.post: look up the device from the URL and return
+        the corresponding mock response, or simulate a connection failure
+        if the mock value is null.
+        """
+        # Map URL back to device_id using configured devices
+        device_id = None
+        for did, base_url in cfg.EDGE_DEVICES.items():
+            if url.startswith(base_url):
+                device_id = did
+                break
+
+        body = mock_data.get(device_id) if device_id else None
+
+        if body is None:
+            # Simulate unreachable device
+            raise requests.ConnectionError(f"Mock: device {device_id or url} unreachable")
+
+        # Build a fake Response object
+        resp = MagicMock()
+        resp.status_code = 200
+        resp.text = json_module.dumps(body)
+        resp.json.return_value = body
+        resp.headers = {"content-type": "application/json"}
+        return resp
+
+    # Need json module under a different name to avoid shadowing the parameter
+    import json as json_module
+
+    # ── Test 1: send_http_command to a single device ──────────────────
+    print("=" * 60)
+    print("TEST 1: send_http_command (single device)")
+    print("=" * 60)
+    with patch("cloud_platform.application.client_http.requests.post", side_effect=mock_post):
+        device_url = cfg.EDGE_DEVICES["device_01"]
+        result = send_http_command(device_url, "cmd_01", sensors=["t1", "aq1"])
+        print(f"  Status code: {result.status_code}")
+        print(f"  Body: {json_module.dumps(result.json(), indent=4)}")
+
+    # ── Test 2: send_http_command to an unreachable device ────────────
+    print("\n" + "=" * 60)
+    print("TEST 2: send_http_command (unreachable device – device_04)")
+    print("=" * 60)
+    with patch("cloud_platform.application.client_http.requests.post", side_effect=mock_post):
+        device_url = cfg.EDGE_DEVICES["device_04"]
+        result = send_http_command(device_url, "cmd_01")
+        print(f"  Result: {result}")  # Should be None
+
+    # ── Test 3: send_command_to_all_devices (all devices) ─────────────
+    print("\n" + "=" * 60)
+    print("TEST 3: send_command_to_all_devices (all devices)")
+    print("=" * 60)
+    with patch("cloud_platform.application.client_http.requests.post", side_effect=mock_post):
+        results = send_command_to_all_devices("cmd_01", sensors=["t1"])
+        for device_id, res in results.items():
+            print(f"\n  [{device_id}]")
+            print(f"    status: {res['status']}")
+            if res["status"] == "success":
+                print(f"    code:   {res['code']}")
+                print(f"    body:   {json_module.dumps(res['body'], indent=6)}")
+            else:
+                print(f"    error:  {res['error']}")
+
+    # ── Test 4: send_command_to_all_devices (subset of devices) ───────
+    print("\n" + "=" * 60)
+    print("TEST 4: send_command_to_all_devices (only device_01, device_03)")
+    print("=" * 60)
+    with patch("cloud_platform.application.client_http.requests.post", side_effect=mock_post):
+        results = send_command_to_all_devices("cmd_01", device_ids=["device_01", "device_03"])
+        for device_id, res in results.items():
+            print(f"\n  [{device_id}]")
+            print(f"    status: {res['status']}")
+            if res["status"] == "success":
+                print(f"    code:   {res['code']}")
+                print(f"    body:   {json_module.dumps(res['body'], indent=6)}")
+            else:
+                print(f"    error:  {res['error']}")
+
+    # ── Test 5: Pydantic validation of results ────────────────────────
+    print("\n" + "=" * 60)
+    print("TEST 5: Pydantic validation (EdgeResults)")
+    print("=" * 60)
+    from cloud_platform.application.operator_api import EdgeResults
+    from pydantic import ValidationError
+
+    with patch("cloud_platform.application.client_http.requests.post", side_effect=mock_post):
+        results = send_command_to_all_devices("cmd_01")
+        try:
+            validated = EdgeResults(edge=results)
+            print("  ✓ Validation passed")
+            for did, dr in validated.edge.items():
+                print(f"    {did}: status={dr.status}, code={dr.code}, error={dr.error}")
+        except ValidationError as ve:
+            print(f"  ✗ Validation failed: {ve}")
+
+    print("\n" + "=" * 60)
+    print("All tests completed.")
+    print("=" * 60)

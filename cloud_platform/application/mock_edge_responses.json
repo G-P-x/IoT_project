@@ -1,0 +1,58 @@
+{
+    "device_01": {
+        "time_stamp": "2026-02-16T15:40:12Z",
+        "records": [
+            {
+                "status": "OK",
+                "type": "sensor",
+                "id": "84F3EB12A0BC-t1",
+                "value": 24.8,
+                "message": "Temperature acquired",
+                "timestamp": "2026-02-16T15:40:12Z"
+            },
+            {
+                "status": "OK",
+                "type": "sensor",
+                "id": "84F3EB12A0BC-aq1",
+                "value": 42.1,
+                "message": "Air quality acquired",
+                "timestamp": "2026-02-16T15:40:12Z"
+            }
+        ]
+    },
+    "device_02": {
+        "time_stamp": "2026-02-16T15:40:13Z",
+        "records": [
+            {
+                "status": "OK",
+                "type": "sensor",
+                "id": "A1B2C3D4E5F6-t1",
+                "value": 27.3,
+                "message": "Temperature acquired",
+                "timestamp": "2026-02-16T15:40:13Z"
+            },
+            {
+                "status": "ERROR",
+                "type": "sensor",
+                "id": "A1B2C3D4E5F6-x1",
+                "value": null,
+                "message": "Invalid sensor_id",
+                "timestamp": "2026-02-16T15:40:13Z"
+            }
+        ]
+    },
+    "device_03": {
+        "time_stamp": "2026-02-16T15:40:14Z",
+        "records": [
+            {
+                "status": "OK",
+                "type": "sensor",
+                "id": "FFEEDDCCBBAA-s1",
+                "value": 0.03,
+                "message": "Seismic reading normal",
+                "timestamp": "2026-02-16T15:40:14Z"
+            }
+        ]
+    },
+    "device_04": null
+}
