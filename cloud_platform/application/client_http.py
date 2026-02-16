@@ -30,14 +30,51 @@ def send_http_command(device_url, command, sensors=None):
         device_url: Base URL of the edge device (e.g. "http://192.168.1.10:5000").
         command:    The command string (e.g. "cmd_01").
         sensors:    Optional list of sensor ids.
+    
+    Returns:
+        HTTP 200 with JSON body containing the result of the command execution, e.g.:
+        {
+            "time_stamp": "2024-06-01T12:00:00Z",
+            "records": [
+                {
+                    "status": "OK",
+                    "type": "sensor",
+                    "id": "84F3EB12A0BC-t1",
+                    "value": 24.8,
+                    "message": "Temperature acquired",
+                    "timestamp": "2026-02-16T15:40:12Z"
+                },
+                {
+                    "status": "OK",
+                    "type": "sensor",
+                    "id": "84F3EB12A0BC-aq1",
+                    "value": 10.2,
+                    "timestamp": "2024-06-01T12:00:00Z",
+                    "operator_id": None,
+                    "command_id": None
+                },
+                {
+                    "status": "ERROR",
+                    "type": "sensor",
+                    "id": "84F3EB12A0BC-x1",
+                    "value": null,
+                    "message": "Invalid sensor_id",
+                    "timestamp": "2026-02-16T15:40:12Z"
+                }
+            ]
+        }
+        
     Returns:
         A requests.Response on success, or None on failure.
     """
     url = _build_url(device_url)
-    payload = {"command": command}
-    if sensors is not None:
-        payload["sensors"] = sensors
-
+    # sending payload structure
+    # {
+    #  "command": "cmd_01",
+    #  "sensors": ["t1", "aq1"]
+    # } 
+    payload = {"command": command, "sensors": sensors} if sensors is not None else {"command": command, "sensors": []}
+    # if sensors is [], the device interprets it as "apply to all sensors linked to the gateway"
     try:
         response = requests.post(url, json=payload, timeout=10)
         logger.info("HTTP notify → %s  response: %s – %s", url, response.status_code, response.text)
@@ -47,7 +84,7 @@ def send_http_command(device_url, command, sensors=None):
         return None
 
 
-def send_command_to_all_devices(command, sensors=None, device_ids=None):
+def send_command_to_all_devices(command, sensors=None, device_ids=None, twin_id=None):
     """
     Fan-out a command to multiple edge devices in parallel.
 
@@ -73,7 +110,7 @@ def send_command_to_all_devices(command, sensors=None, device_ids=None):
     if device_ids is not None:
         devices = {did: url for did, url in devices.items() if did in device_ids}
 
-    results = {}
+    results = {} # store results per device_id (per gateway)
 
     with ThreadPoolExecutor(max_workers=len(devices) or 1) as executor:
         # Submit one task per device
@@ -87,6 +124,37 @@ def send_command_to_all_devices(command, sensors=None, device_ids=None):
             device_id = future_to_device[future]
             try:
                 response = future.result()
+                # Expected response format:
+                # {
+                #     "time_stamp": "2024-06-01T12:00:00Z",
+                #     "records": [
+                #         {
+                #             "status": "OK",
+                #             "type": "sensor",
+                #             "id": "84F3EB12A0BC-t1",
+                #             "value": 24.8,
+                #             "message": "Temperature acquired",
+                #             "timestamp": "2026-02-16T15:40:12Z"
+                #         },
+                #         {
+                #             "status": "OK",
+                #             "type": "sensor",
+                #             "id": "84F3EB12A0BC-aq1",
+                #             "value": 10.2,
+                #             "timestamp": "2024-06-01T12:00:00Z",
+                #             "operator_id": None,
+                #             "command_id": None
+                #         },
+                #         {
+                #             "status": "ERROR",
+                #             "type": "sensor",
+                #             "id": "84F3EB12A0BC-x1",
+                #             "value": null,
+                #             "message": "Invalid sensor_id",
+                #             "timestamp": "2026-02-16T15:40:12Z"
+                #         }
+                #     ]
+                # }
                 if response is not None:
                     content_type = response.headers.get("content-type", "")
                     results[device_id] = {
@@ -104,3 +172,8 @@ def send_command_to_all_devices(command, sensors=None, device_ids=None):
                     "status": "error",
                     "error": str(e),
                 }
+    return results
+
+if __name__ == "__main__":
+    # Testing the client_http module
+    print("Testing client_http module...")
