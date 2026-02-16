@@ -1,4 +1,3 @@
-from multiprocessing import connection
 from flask import Blueprint, current_app, jsonify, request
 from flask import render_template
 from cloud_platform.application import client_http
@@ -211,11 +210,18 @@ def send_command():
 
     print(f"Received command: {command_id} for twin: {twin_id}, gateways: {gateway_ids}, sensors: {sensor_ids}. from operator: {operator_id}")
     
-    # return jsonify({
-    #     "status": overall_status,
-    #     "message": f"Command '{command_id}' sent to twin '{twin_id}', gateways '{gateway_ids}', sensors '{sensor_ids}', by operator '{operator_id}'.",
-    #     "devices": edge_results,
-    #     "sensor_status": sensors_status,
+    # Determine overall status
+    any_success = any(r["status"] == "success" for r in edge_results.values())
+    overall_status = "success" if any_success else "error"
+    http_code = 200 if any_success else 502
+
+    return jsonify({
+        "status": overall_status,
+        "message": f"Command '{command_id}' sent to twin '{twin_id}', gateways '{gateway_ids}', sensors '{sensor_ids}', by operator '{operator_id}'.",
+        "devices": edge_results,
+        "connection_status": connection_status,
+        "sensor_status": sensors_status,
+    }), http_code
 
         
 
@@ -225,5 +231,172 @@ def register_operator_routes(app):
     app.register_blueprint(bp_operator)
 
 if __name__ == "__main__":
-    # runs test for this module
-    print("Testing operator_api module...")
+    ## IMPORTANT: run from project root as:  python -m cloud_platform.application.operator_api
+    import json
+    import os
+    from flask import Flask
+    from unittest.mock import patch, MagicMock
+
+    # ── Helper: build mock edge_results from the JSON file ────────────
+    mock_file = os.path.join(os.path.dirname(__file__), "mock_edge_responses.json")
+    with open(mock_file, "r") as f:
+        mock_raw = json.load(f)
+
+    def build_mock_edge_results(device_filter=None):
+        """
+        Convert the raw mock JSON into the dict format that
+        send_command_to_all_devices() would return.
+        """
+        results = {}
+        for did, body in mock_raw.items():
+            if device_filter and did not in device_filter:
+                continue
+            if body is None:
+                results[did] = {"status": "error", "error": "No response from device."}
+            else:
+                results[did] = {"status": "success", "code": 200, "body": body}
+        return results
+
+    # ── Create a minimal Flask test app ───────────────────────────────
+    app = Flask(__name__)
+    app.config["DEFAULT_TWIN_ID"] = "etna_01"
+    register_operator_routes(app)
+    client = app.test_client()
+
+    # ── TEST 1: Missing JSON body → 400 ──────────────────────────────
+    print("=" * 60)
+    print("TEST 1: POST /commands/send with no JSON body → 400")
+    print("=" * 60)
+    resp = client.post("/operator/commands/send", content_type="application/json", data="")
+    print(f"  Status: {resp.status_code}")
+    print(f"  Body:   {resp.get_json()}")
+    assert resp.status_code == 400, f"Expected 400, got {resp.status_code}"
+    print("  PASSED")
+
+    # ── TEST 2: Missing required fields → 400 ────────────────────────
+    print("\n" + "=" * 60)
+    print("TEST 2: POST /commands/send missing command_id → 400")
+    print("=" * 60)
+    resp = client.post("/operator/commands/send", json={"target": {"twin_id": "etna_01"}, "issued_by": "op_01"})
+    print(f"  Status: {resp.status_code}")
+    print(f"  Body:   {resp.get_json()}")
+    assert resp.status_code == 400, f"Expected 400, got {resp.status_code}"
+    print("  PASSED")
+
+    # ── TEST 3: Valid command to all devices (mix of success/error) ───
+    print("\n" + "=" * 60)
+    print("TEST 3: Valid command → all devices (3 success, 1 error)")
+    print("=" * 60)
+    mock_results = build_mock_edge_results()
+    with patch("cloud_platform.application.client_http.send_command_to_all_devices", return_value=mock_results):
+        resp = client.post("/operator/commands/send", json={
+            "target": {"twin_id": "etna_01"},
+            "command_id": "cmd_01",
+            "issued_by": "operator_01"
+        })
+    data = resp.get_json()
+    print(f"  Status: {resp.status_code}")
+    print(f"  Overall status: {data['status']}")
+    print(f"  Connection status: {json.dumps(data['connection_status'], indent=4)}")
+    print(f"  Sensor status: {json.dumps(data['sensor_status'], indent=4)}")
+    print(f"  Devices responded: {list(data['devices'].keys())}")
+    assert resp.status_code == 200, f"Expected 200, got {resp.status_code}"
+    assert data["status"] == "success"
+    assert data["connection_status"]["device_04"] == "error"
+    print("  PASSED")
+
+    # ── TEST 4: Valid command to subset of devices ────────────────────
+    print("\n" + "=" * 60)
+    print("TEST 4: Valid command → only device_01, device_03")
+    print("=" * 60)
+    mock_results = build_mock_edge_results(device_filter=["device_01", "device_03"])
+    with patch("cloud_platform.application.client_http.send_command_to_all_devices", return_value=mock_results):
+        resp = client.post("/operator/commands/send", json={
+            "target": {"twin_id": "etna_01", "gateway_id": ["device_01", "device_03"]},
+            "command_id": "cmd_01",
+            "issued_by": "operator_01"
+        })
+    data = resp.get_json()
+    print(f"  Status: {resp.status_code}")
+    print(f"  Devices: {list(data['devices'].keys())}")
+    assert resp.status_code == 200
+    assert set(data["devices"].keys()) == {"device_01", "device_03"}
+    print("  PASSED")
+
+    # ── TEST 5: All devices fail → 502 ───────────────────────────────
+    print("\n" + "=" * 60)
+    print("TEST 5: All devices unreachable → 502")
+    print("=" * 60)
+    all_error = {
+        "device_01": {"status": "error", "error": "Connection refused"},
+        "device_02": {"status": "error", "error": "Timeout"},
+    }
+    with patch("cloud_platform.application.client_http.send_command_to_all_devices", return_value=all_error):
+        resp = client.post("/operator/commands/send", json={
+            "target": {"twin_id": "etna_01"},
+            "command_id": "cmd_01",
+            "issued_by": "operator_01"
+        })
+    data = resp.get_json()
+    print(f"  Status: {resp.status_code}")
+    print(f"  Overall status: {data['status']}")
+    assert resp.status_code == 502
+    assert data["status"] == "error"
+    print("  PASSED")
+
+    # ── TEST 6: Pydantic validation catches bad structure → 502 ──────
+    print("\n" + "=" * 60)
+    print("TEST 6: Invalid device response structure → Pydantic 502")
+    print("=" * 60)
+    bad_results = {
+        "device_01": {"wrong_field": "oops"}  # missing "status"
+    }
+    with patch("cloud_platform.application.client_http.send_command_to_all_devices", return_value=bad_results):
+        resp = client.post("/operator/commands/send", json={
+            "target": {"twin_id": "etna_01"},
+            "command_id": "cmd_01",
+            "issued_by": "operator_01"
+        })
+    data = resp.get_json()
+    print(f"  Status: {resp.status_code}")
+    print(f"  Message: {data['message']}")
+    assert resp.status_code == 502
+    assert "Invalid response structure" in data["message"]
+    print("  PASSED")
+
+    # ── TEST 7: Sensor-level error detection ─────────────────────────
+    print("\n" + "=" * 60)
+    print("TEST 7: Sensor-level errors detected in response")
+    print("=" * 60)
+    mock_results = build_mock_edge_results(device_filter=["device_02"])
+    with patch("cloud_platform.application.client_http.send_command_to_all_devices", return_value=mock_results):
+        resp = client.post("/operator/commands/send", json={
+            "target": {"twin_id": "etna_01", "gateway_id": ["device_02"]},
+            "command_id": "cmd_01",
+            "issued_by": "operator_01"
+        })
+    data = resp.get_json()
+    print(f"  Status: {resp.status_code}")
+    print(f"  Sensor status: {json.dumps(data['sensor_status'], indent=4)}")
+    # device_02 has one OK sensor and one ERROR sensor
+    assert data["sensor_status"]["device_02:A1B2C3D4E5F6-t1"] == "OK"
+    assert data["sensor_status"]["device_02:A1B2C3D4E5F6-x1"] == "ERROR"
+    print("  PASSED")
+
+    # ── TEST 8: GET /history/<parameter> returns mock data ───────────
+    print("\n" + "=" * 60)
+    print("TEST 8: GET /history/temperature returns mock telemetry")
+    print("=" * 60)
+    resp = client.get("/operator/history/temperature?from=2026-02-10T00:00:00&to=2026-02-16T00:00:00")
+    data = resp.get_json()
+    print(f"  Status: {resp.status_code}")
+    print(f"  Points returned: {len(data)}")
+    print(f"  First point: {data[0]}")
+    assert resp.status_code == 200
+    assert len(data) > 0
+    assert "value" in data[0] and "sensor_id" in data[0]
+    print("  PASSED")
+
+    print("\n" + "=" * 60)
+    print("All tests completed successfully.")
+    print("=" * 60)
