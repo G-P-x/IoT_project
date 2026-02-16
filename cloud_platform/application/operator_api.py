@@ -1,6 +1,6 @@
-import operator
-from flask import Blueprint, current_app, jsonify, request
+from flask import Blueprint, cli, current_app, jsonify, request
 from flask import render_template
+from cloud_platform.application import client_http
 
 # This file defines the operator API routes and their handlers.
 # An operator can use these routes to view telemetry data, health events, and send commands to the DT.
@@ -108,12 +108,27 @@ def send_command():
     command_id = data.get("command_id")
     operator_id = data.get("issued_by")
 
+    # Fan out the command to all (or selected) edge devices in parallel.
+    # Blocks only THIS request thread; other Flask threads keep serving normally.
+    edge_results = client_http.send_command_to_all_devices(
+        command_id,
+        sensors=[sensor_id] if sensor_id else None,
+    )
+
     # dt = current_app.extensions["dt_service"]
     # dt.send_command(twin_id, command_id, sensor_id=sensor_id)
 
-    # ── Mock response for testing ──────────────────────────────────────────
+    # Check if any device responded successfully
+    any_success = any(r["status"] == "success" for r in edge_results.values())
+    overall_status = "success" if any_success else "error"
+    http_code = 200 if any_success else 502
+
     print(f"Received command: {command_id} for twin: {twin_id}, sensor: {sensor_id}. from operator: {operator_id}")
-    return jsonify({"status": "success", "message": f"Command '{command_id}' sent to twin '{twin_id}', sensor '{sensor_id}', by operator '{operator_id}'."})
+    return jsonify({
+        "status": overall_status,
+        "message": f"Command '{command_id}' sent to twin '{twin_id}', sensor '{sensor_id}', by operator '{operator_id}'.",
+        "devices": edge_results,
+    }), http_code
 
         
 
