@@ -14,6 +14,8 @@ PyYAML==6.0.2
 uuid==1.30
 Werkzeug==3.1.3
 paho-mqtt==1.5.0
+pydantic==2.10.0
+requests==2.31.0
 
 # telegram additional requirements
 python-telegram-bot==21.9
