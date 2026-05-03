@@ -119,18 +119,26 @@ MongoDB stores state, not behavior.
 - **Networked/Constrained**: CoAP over UDP
 - **Physically Attached**: I2C / SPI / UART
 
-### Arduino ↔ Cloud
-**MQTT over TCP + TLS**
-  - `telemetry/batch` - Periodic sensor data
-  - `telemetry/ondemand` - Requested real-time data
-  - `health/event` - Status changes
+### Arduino $\to$ Cloud
+**HTTP polling (cloud as client, gateway as server)**
+  - Periodic polling to update sensor status
+  - On-demand polling for real-time data
 
-### Cloud ↔ Arduino (Commands)
-- **Method**: MQTT downlink (push-based, no polling)
+### Cloud $\to$ Arduino (Commands)
+- **Method**: HTTP requests from cloud client to gateway server
 
-### Cloud ↔ Users
+### Cloud $\to$ Researchers
 - **Queries/Commands**: HTTPS
 - **Real-time Updates**: Optional WebSocket/SSE
+
+### Hikers $\to$ Cloud
+By the **Telegram Bot** with commands:
+- **/start**
+- **/help**
+- **/status**
+### Cloud $\to$ Hikers
+By the **Telegram Bot**
+- **push notification**
 
 ---
 
