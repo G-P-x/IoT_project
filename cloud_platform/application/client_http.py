@@ -17,12 +17,13 @@ logger = logging.getLogger(__name__)
 cfg = Config()
 
 
+
 def _build_url(base_url):
     """Build the notify endpoint URL for a given device base URL."""
-    return base_url.rstrip("/") + "/notify"
+    return base_url.rstrip("/") + cfg.COMMAND_ENDPOINT
 
 
-def send_http_command(device_url, command, sensors=None):
+def _send_http_command(device_url, command, sensors=None):
     """
     Send an HTTP POST to a single edge device.
 
@@ -115,7 +116,7 @@ def send_command_to_all_devices(command, sensors=None, device_ids=None, twin_id=
     with ThreadPoolExecutor(max_workers=len(devices) or 1) as executor:
         # Submit one task per device
         future_to_device = {
-            executor.submit(send_http_command, url, command, sensors): device_id
+            executor.submit(_send_http_command, url, command, sensors): device_id
             for device_id, url in devices.items()
         }
 
@@ -174,6 +175,55 @@ def send_command_to_all_devices(command, sensors=None, device_ids=None, twin_id=
                 }
     return results
 
+def _build_poll_url(base_url: str) -> str:
+    return base_url.rstrip("/") + cfg.POLL_ENDPOINT
+
+def _normalize_poll_body(body):
+    records = []
+    for item in body:
+        rec = item.get("record", {})
+        records.append({
+            "status": rec.get("status"),
+            "type": rec.get("type", "sensor"),
+            "id": rec.get("id"),
+            "value": rec.get("value"),
+            "timestamp": rec.get("timestamp"),
+        })
+    time_stamp = body[-1].get("time_stamp") if body else None
+    return {"time_stamp": time_stamp, "records": records}
+
+def _poll_gateway(url):
+    try:
+        resp = requests.get(url, timeout=10)
+        resp.raise_for_status()
+        body = resp.json()
+        return {"status": "success", "code": resp.status_code, "body": _normalize_poll_body(body)}
+    except requests.RequestException as e:
+        logger.error("HTTP poll → %s failed: %s", url, e)
+        return {"status": "error", "error": str(e)}
+
+def poll_gateways():
+    # Initialize results dictionary
+    results = {}
+
+    with ThreadPoolExecutor(max_workers=len(cfg.EDGE_DEVICES) or 1) as executor:
+        # Submit one polling task per gateway
+        future_to_device = {
+            executor.submit(_poll_gateway, _build_poll_url(url)): device_id
+            for device_id, url in cfg.EDGE_DEVICES.items()
+        }
+
+    # Collect results as they complete
+    for future in as_completed(future_to_device):
+        device_id = future_to_device[future]
+        try:
+            result = future.result()
+            results[device_id] = result
+        except Exception as e:
+            results[device_id] = {"status": "error", "error": str(e)}
+    return results
+
+
 if __name__ == "__main__":
     ## IMPORTANT: this test code is meant to be run as a standalone script to test the client_http module in isolation.
     # Since it doesn't know about the project root, you should run it as a module from the project root like this:
@@ -224,7 +274,7 @@ if __name__ == "__main__":
     print("=" * 60)
     with patch("cloud_platform.application.client_http.requests.post", side_effect=mock_post):
         device_url = cfg.EDGE_DEVICES["device_01"]
-        result = send_http_command(device_url, "cmd_01", sensors=["t1", "aq1"])
+        result = _send_http_command(device_url, "cmd_01", sensors=["t1", "aq1"])
         print(f"  Status code: {result.status_code}")
         print(f"  Body: {json_module.dumps(result.json(), indent=4)}")
 
@@ -234,7 +284,7 @@ if __name__ == "__main__":
     print("=" * 60)
     with patch("cloud_platform.application.client_http.requests.post", side_effect=mock_post):
         device_url = cfg.EDGE_DEVICES["device_04"]
-        result = send_http_command(device_url, "cmd_01")
+        result = _send_http_command(device_url, "cmd_01")
         print(f"  Result: {result}")  # Should be None
 
     # ── Test 3: send_command_to_all_devices (all devices) ─────────────
