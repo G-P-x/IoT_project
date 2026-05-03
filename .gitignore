@@ -2,3 +2,6 @@ __pycache__/
 developers_notes.txt
 .venv/
 .env
+.obsidian/
+Python-Graph-Links/
+app_script_report.md

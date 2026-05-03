@@ -423,6 +423,75 @@ fieldset legend {
     color: var(--text-primary);
 }
 
+/* ==================== Tabs ==================== */
+.tab-bar {
+    display: flex;
+    gap: 0;
+    margin-bottom: 1.5rem;
+    border-bottom: 2px solid var(--border);
+}
+
+.tab-btn {
+    padding: 0.75rem 1.5rem;
+    background: none;
+    border: none;
+    border-bottom: 2px solid transparent;
+    margin-bottom: -2px;
+    font-size: 1rem;
+    font-weight: 500;
+    color: var(--text-secondary);
+    cursor: pointer;
+    transition: all 0.3s ease;
+}
+
+.tab-btn:hover {
+    color: var(--primary-color);
+}
+
+.tab-btn.active {
+    color: var(--primary-color);
+    border-bottom-color: var(--primary-color);
+}
+
+.tab-content {
+    display: none;
+}
+
+.tab-content.active {
+    display: block;
+}
+
+/* ==================== Badges ==================== */
+.badge {
+    display: inline-block;
+    padding: 0.2rem 0.6rem;
+    border-radius: 9999px;
+    font-size: 0.8rem;
+    font-weight: 600;
+    text-transform: capitalize;
+}
+
+.badge-active  { background-color: #d1fae5; color: #065f46; }
+.badge-inactive { background-color: #e5e7eb; color: #374151; }
+.badge-warn    { background-color: #fef3c7; color: #92400e; }
+.badge-error   { background-color: #fee2e2; color: #991b1b; }
+.badge-unknown { background-color: #f3f4f6; color: #6b7280; }
+
+/* ==================== Small / Danger Buttons ==================== */
+.btn-small {
+    padding: 0.35rem 0.75rem;
+    font-size: 0.85rem;
+}
+
+.btn-danger {
+    background-color: var(--error-color);
+    color: white;
+}
+
+.btn-danger:hover {
+    background-color: #dc2626;
+}
+
 /* ==================== Responsive ==================== */
 @media (max-width: 768px) {
     .navbar .container {

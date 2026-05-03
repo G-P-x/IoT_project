@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Device Management - IoT Platform</title>
+    <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}">
+</head>
+<body>
+    <nav class="navbar">
+        <div class="container">
+            <h1 class="logo">IoT Platform</h1>
+            <ul class="nav-menu">
+                <li><a href="/operator/home">Dashboard</a></li>
+                <li><a href="/operator/history">History</a></li>
+                <li><a href="/operator/commands">Commands</a></li>
+                <li><a href="/operator/manage" class="active">Manage</a></li>
+            </ul>
+        </div>
+    </nav>
+
+    <div class="container">
+        <section class="commands-section">
+            <h2>Device Management</h2>
+
+            <div id="errorMessage" class="error-message" style="display: none;"></div>
+            <div id="successMessage" class="success-message" style="display: none;"></div>
+
+            <!-- ── Tab bar ──────────────────────────────────────────── -->
+            <div class="tab-bar">
+                <button class="tab-btn active" data-tab="gateway" onclick="switchTab('gateway')">Gateways</button>
+                <button class="tab-btn" data-tab="sensor" onclick="switchTab('sensor')">Sensors</button>
+                <button class="tab-btn" data-tab="actuator" onclick="switchTab('actuator')">Actuators</button>
+            </div>
+
+            <!-- ══════════════════════════════════════════════════════
+                 GATEWAY FORM
+                 ══════════════════════════════════════════════════════ -->
+            <div id="tab-gateway" class="tab-content active">
+                <form id="gatewayForm" class="command-form" onsubmit="return submitDR(event, 'gateway')">
+                    <fieldset>
+                        <legend>Register New Gateway</legend>
+
+                        <div class="form-group">
+                            <label for="gw-name">Name *</label>
+                            <input type="text" id="gw-name" placeholder="e.g. Gateway North Face" required />
+                        </div>
+
+                        <div class="form-group">
+                            <label for="gw-device_id">Device ID *</label>
+                            <input type="text" id="gw-device_id" placeholder="e.g. 84F3EB12A0BC" required />
+                        </div>
+
+                        <div class="form-group">
+                            <label for="gw-description">Description</label>
+                            <input type="text" id="gw-description" placeholder="Brief description" />
+                        </div>
+
+                        <div class="form-group">
+                            <label for="gw-location">Location</label>
+                            <input type="text" id="gw-location" placeholder="e.g. Mt. Etna - North face" />
+                        </div>
+
+                        <div class="form-group">
+                            <label for="gw-ip_address">IP Address</label>
+                            <input type="text" id="gw-ip_address" placeholder="e.g. 192.168.1.100" />
+                        </div>
+
+                        <div class="form-group">
+                            <label for="gw-port">Port</label>
+                            <input type="number" id="gw-port" placeholder="e.g. 5000" min="1" max="65535" />
+                        </div>
+                    </fieldset>
+
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">Create Gateway</button>
+                        <button type="reset" class="btn btn-secondary">Clear</button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- ══════════════════════════════════════════════════════
+                 SENSOR FORM
+                 ══════════════════════════════════════════════════════ -->
+            <div id="tab-sensor" class="tab-content">
+                <form id="sensorForm" class="command-form" onsubmit="return submitDR(event, 'sensor')">
+                    <fieldset>
+                        <legend>Register New Sensor</legend>
+
+                        <div class="form-group">
+                            <label for="sn-name">Name *</label>
+                            <input type="text" id="sn-name" placeholder="e.g. Temperature Probe NF-01" required />
+                        </div>
+
+                        <div class="form-group">
+                            <label for="sn-sensor_id">Sensor ID *</label>
+                            <input type="text" id="sn-sensor_id" placeholder="e.g. 84F3EB12A0BC-t1" required />
+                        </div>
+
+                        <div class="form-group">
+                            <label for="sn-sensor_type">Sensor Type *</label>
+                            <select id="sn-sensor_type" required>
+                                <option value="" disabled selected>Select type</option>
+                                <option value="temperature">Temperature</option>
+                                <option value="air_quality">Air Quality</option>
+                                <option value="seismic_waves">Seismic Waves</option>
+                                <option value="humidity">Humidity</option>
+                                <option value="gas">Gas</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="sn-unit">Unit</label>
+                            <input type="text" id="sn-unit" placeholder="e.g. °C, AQI, mm/s" />
+                        </div>
+
+                        <div class="form-group">
+                            <label for="sn-description">Description</label>
+                            <input type="text" id="sn-description" placeholder="Brief description" />
+                        </div>
+
+                        <div class="form-group">
+                            <label for="sn-gateway_id">Gateway ID</label>
+                            <select id="sn-gateway_id">
+                                <option value="" selected>None (standalone)</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="sn-alert_min">Alert Threshold Min</label>
+                            <input type="number" id="sn-alert_min" step="any" placeholder="e.g. -10" />
+                        </div>
+
+                        <div class="form-group">
+                            <label for="sn-alert_max">Alert Threshold Max</label>
+                            <input type="number" id="sn-alert_max" step="any" placeholder="e.g. 900" />
+                        </div>
+                    </fieldset>
+
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">Create Sensor</button>
+                        <button type="reset" class="btn btn-secondary">Clear</button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- ══════════════════════════════════════════════════════
+                 ACTUATOR FORM
+                 ══════════════════════════════════════════════════════ -->
+            <div id="tab-actuator" class="tab-content">
+                <form id="actuatorForm" class="command-form" onsubmit="return submitDR(event, 'actuator')">
+                    <fieldset>
+                        <legend>Register New Actuator</legend>
+
+                        <div class="form-group">
+                            <label for="ac-name">Name *</label>
+                            <input type="text" id="ac-name" placeholder="e.g. Alert Siren NF" required />
+                        </div>
+
+                        <div class="form-group">
+                            <label for="ac-actuator_id">Actuator ID *</label>
+                            <input type="text" id="ac-actuator_id" placeholder="e.g. 84F3EB12A0BC-siren1" required />
+                        </div>
+
+                        <div class="form-group">
+                            <label for="ac-actuator_type">Actuator Type *</label>
+                            <select id="ac-actuator_type" required>
+                                <option value="" disabled selected>Select type</option>
+                                <option value="siren">Siren</option>
+                                <option value="valve">Valve</option>
+                                <option value="camera">Camera</option>
+                                <option value="light">Light</option>
+                                <option value="relay">Relay</option>
+                            </select>
+                        </div>
+
+                        <div class="form-group">
+                            <label for="ac-description">Description</label>
+                            <input type="text" id="ac-description" placeholder="Brief description" />
+                        </div>
+
+                        <div class="form-group">
+                            <label for="ac-gateway_id">Gateway ID</label>
+                            <select id="ac-gateway_id">
+                                <option value="" selected>None (standalone)</option>
+                            </select>
+                        </div>
+                    </fieldset>
+
+                    <div class="form-actions">
+                        <button type="submit" class="btn btn-primary">Create Actuator</button>
+                        <button type="reset" class="btn btn-secondary">Clear</button>
+                    </div>
+                </form>
+            </div>
+
+            <!-- ── Loading indicator ────────────────────────────────── -->
+            <div id="loading" class="loading" style="display: none;">
+                <p>Processing...</p>
+            </div>
+
+            <!-- ── Existing devices table ──────────────────────────── -->
+            <div id="deviceListSection" style="margin-top: 2rem;">
+                <h3 id="deviceListTitle">Registered Gateways</h3>
+                <div class="table-wrapper">
+                    <table class="data-table" id="deviceTable">
+                        <thead id="deviceTableHead"></thead>
+                        <tbody id="deviceTableBody"></tbody>
+                    </table>
+                </div>
+                <p id="noDevices" style="display: none; color: var(--text-secondary); padding: 1rem;">
+                    No devices registered yet.
+                </p>
+            </div>
+
+        </section>
+    </div>
+
+    <script>
+    /* ==================================================================
+       State
+       ================================================================== */
+    let currentTab = 'gateway';
+
+    /* ==================================================================
+       Tab switching
+       ================================================================== */
+    function switchTab(tab) {
+        currentTab = tab;
+        // Toggle active class on buttons
+        document.querySelectorAll('.tab-btn').forEach(btn => btn.classList.remove('active'));
+        document.querySelector(`.tab-btn[data-tab="${tab}"]`).classList.add('active');
+        // Toggle active class on content panels
+        document.querySelectorAll('.tab-content').forEach(panel => panel.classList.remove('active'));
+        document.getElementById(`tab-${tab}`).classList.add('active');
+        // Update title and load list
+        const titles = { gateway: 'Registered Gateways', sensor: 'Registered Sensors', actuator: 'Registered Actuators' };
+        document.getElementById('deviceListTitle').textContent = titles[tab];
+        clearMessages();
+        loadDeviceList(tab);
+    }
+
+    /* ==================================================================
+       Messages
+       ================================================================== */
+    function showError(msg) {
+        const el = document.getElementById('errorMessage');
+        el.textContent = msg;
+        el.style.display = 'block';
+        document.getElementById('successMessage').style.display = 'none';
+    }
+
+    function showSuccess(msg) {
+        const el = document.getElementById('successMessage');
+        el.textContent = msg;
+        el.style.display = 'block';
+        document.getElementById('errorMessage').style.display = 'none';
+    }
+
+    function clearMessages() {
+        document.getElementById('errorMessage').style.display = 'none';
+        document.getElementById('successMessage').style.display = 'none';
+    }
+
+    /* ==================================================================
+       Form submission — create a new DR
+       ================================================================== */
+    async function submitDR(event, drType) {
+        event.preventDefault();
+        clearMessages();
+        document.getElementById('loading').style.display = 'block';
+
+        let payload = {};
+
+        if (drType === 'gateway') {
+            payload = {
+                profile: {
+                    name:        document.getElementById('gw-name').value.trim(),
+                    device_id:   document.getElementById('gw-device_id').value.trim(),
+                    description: document.getElementById('gw-description').value.trim() || '',
+                    location:    document.getElementById('gw-location').value.trim() || '',
+                    ip_address:  document.getElementById('gw-ip_address').value.trim() || '',
+                    port:        parseInt(document.getElementById('gw-port').value) || 5000
+                },
+                data: {
+                    operational_status: 'active',
+                    sensors: [],
+                    measurements: []
+                }
+            };
+        } else if (drType === 'sensor') {
+            payload = {
+                profile: {
+                    name:        document.getElementById('sn-name').value.trim(),
+                    sensor_id:   document.getElementById('sn-sensor_id').value.trim(),
+                    sensor_type: document.getElementById('sn-sensor_type').value,
+                    unit:        document.getElementById('sn-unit').value.trim() || '',
+                    description: document.getElementById('sn-description').value.trim() || '',
+                    gateway_id:  document.getElementById('sn-gateway_id').value || ''
+                },
+                data: {
+                    current_value: 0.0,
+                    measurements: [],
+                    alert_threshold_min: parseFloat(document.getElementById('sn-alert_min').value) || null,
+                    alert_threshold_max: parseFloat(document.getElementById('sn-alert_max').value) || null
+                }
+            };
+        } else if (drType === 'actuator') {
+            payload = {
+                profile: {
+                    name:          document.getElementById('ac-name').value.trim(),
+                    actuator_id:   document.getElementById('ac-actuator_id').value.trim(),
+                    actuator_type: document.getElementById('ac-actuator_type').value,
+                    description:   document.getElementById('ac-description').value.trim() || '',
+                    gateway_id:    document.getElementById('ac-gateway_id').value || ''
+                },
+                data: {
+                    current_state: 'off',
+                    last_command: '',
+                    command_history: [],
+                    measurements: []
+                }
+            };
+        }
+
+        try {
+            const response = await fetch(`/api/dr/${drType}`, {
+                method:  'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body:    JSON.stringify(payload)
+            });
+            const result = await response.json();
+
+            if (response.ok) {
+                showSuccess(`${drType.charAt(0).toUpperCase() + drType.slice(1)} created successfully (ID: ${result[drType + '_id'] || 'N/A'})`);
+                event.target.reset();
+                loadDeviceList(drType);
+                // Refresh gateway selects so new gateways appear for sensors/actuators
+                if (drType === 'gateway') loadGatewayOptions();
+            } else {
+                showError(result.error || 'Failed to create device');
+            }
+        } catch (err) {
+            showError('Network error: ' + err.message);
+        } finally {
+            document.getElementById('loading').style.display = 'none';
+        }
+
+        return false;
+    }
+
+    /* ==================================================================
+       Delete a DR
+       ================================================================== */
+    async function deleteDR(drType, drId) {
+        if (!confirm(`Delete this ${drType}? This cannot be undone.`)) return;
+        clearMessages();
+
+        try {
+            const response = await fetch(`/api/dr/${drType}/${drId}`, { method: 'DELETE' });
+            const result = await response.json();
+
+            if (response.ok) {
+                showSuccess(`${drType.charAt(0).toUpperCase() + drType.slice(1)} deleted`);
+                loadDeviceList(drType);
+                if (drType === 'gateway') loadGatewayOptions();
+            } else {
+                showError(result.error || 'Failed to delete');
+            }
+        } catch (err) {
+            showError('Network error: ' + err.message);
+        }
+    }
+
+    /* ==================================================================
+       Load & render device list table
+       ================================================================== */
+    async function loadDeviceList(drType) {
+        const thead = document.getElementById('deviceTableHead');
+        const tbody = document.getElementById('deviceTableBody');
+        const noDevices = document.getElementById('noDevices');
+        thead.innerHTML = '';
+        tbody.innerHTML = '';
+        noDevices.style.display = 'none';
+
+        try {
+            const response = await fetch(`/api/dr/${drType}`);
+            const result = await response.json();
+            const items = result[drType + 's'] || [];
+
+            if (items.length === 0) {
+                noDevices.style.display = 'block';
+                return;
+            }
+
+            // Build header & rows based on type
+            if (drType === 'gateway') {
+                thead.innerHTML = '<tr><th>Name</th><th>Device ID</th><th>Location</th><th>IP</th><th>Port</th><th>Status</th><th></th></tr>';
+                items.forEach(gw => {
+                    const p = gw.profile || {};
+                    const d = gw.data || {};
+                    tbody.innerHTML += `<tr>
+                        <td>${esc(p.name)}</td>
+                        <td><code>${esc(p.device_id)}</code></td>
+                        <td>${esc(p.location)}</td>
+                        <td>${esc(p.ip_address)}</td>
+                        <td>${p.port || '-'}</td>
+                        <td>${statusBadge(d.operational_status)}</td>
+                        <td><button class="btn btn-small btn-danger" onclick="deleteDR('gateway','${gw._id}')">Delete</button></td>
+                    </tr>`;
+                });
+            } else if (drType === 'sensor') {
+                thead.innerHTML = '<tr><th>Name</th><th>Sensor ID</th><th>Type</th><th>Unit</th><th>Gateway</th><th>Status</th><th></th></tr>';
+                items.forEach(sn => {
+                    const p = sn.profile || {};
+                    const m = sn.metadata || {};
+                    tbody.innerHTML += `<tr>
+                        <td>${esc(p.name)}</td>
+                        <td><code>${esc(p.sensor_id)}</code></td>
+                        <td>${esc(p.sensor_type)}</td>
+                        <td>${esc(p.unit)}</td>
+                        <td>${esc(p.gateway_id) || '-'}</td>
+                        <td>${statusBadge(m.status)}</td>
+                        <td><button class="btn btn-small btn-danger" onclick="deleteDR('sensor','${sn._id}')">Delete</button></td>
+                    </tr>`;
+                });
+            } else if (drType === 'actuator') {
+                thead.innerHTML = '<tr><th>Name</th><th>Actuator ID</th><th>Type</th><th>State</th><th>Gateway</th><th>Status</th><th></th></tr>';
+                items.forEach(ac => {
+                    const p = ac.profile || {};
+                    const d = ac.data || {};
+                    const m = ac.metadata || {};
+                    tbody.innerHTML += `<tr>
+                        <td>${esc(p.name)}</td>
+                        <td><code>${esc(p.actuator_id)}</code></td>
+                        <td>${esc(p.actuator_type)}</td>
+                        <td>${statusBadge(d.current_state)}</td>
+                        <td>${esc(p.gateway_id) || '-'}</td>
+                        <td>${statusBadge(m.status)}</td>
+                        <td><button class="btn btn-small btn-danger" onclick="deleteDR('actuator','${ac._id}')">Delete</button></td>
+                    </tr>`;
+                });
+            }
+        } catch (err) {
+            noDevices.textContent = 'Error loading devices: ' + err.message;
+            noDevices.style.display = 'block';
+        }
+    }
+
+    /* ==================================================================
+       Populate gateway <select> for sensor & actuator forms
+       ================================================================== */
+    async function loadGatewayOptions() {
+        try {
+            const response = await fetch('/api/dr/gateway');
+            const result = await response.json();
+            const gateways = result.gateways || [];
+
+            ['sn-gateway_id', 'ac-gateway_id'].forEach(selectId => {
+                const select = document.getElementById(selectId);
+                // Keep the first "None" option
+                select.innerHTML = '<option value="" selected>None (standalone)</option>';
+                gateways.forEach(gw => {
+                    const opt = document.createElement('option');
+                    opt.value = gw._id;
+                    opt.textContent = `${gw.profile?.name || 'Unnamed'} (${gw.profile?.device_id || gw._id})`;
+                    select.appendChild(opt);
+                });
+            });
+        } catch (_) { /* gateway fetch failed — leave dropdown empty */ }
+    }
+
+    /* ==================================================================
+       Helpers
+       ================================================================== */
+    function esc(val) { return val ? String(val).replace(/</g, '&lt;').replace(/>/g, '&gt;') : ''; }
+
+    function statusBadge(status) {
+        if (!status) return '<span class="badge badge-unknown">—</span>';
+        const classes = {
+            active: 'badge-active', on: 'badge-active',
+            inactive: 'badge-inactive', off: 'badge-inactive',
+            maintenance: 'badge-warn', calibrating: 'badge-warn', partial: 'badge-warn',
+            faulty: 'badge-error', decommissioned: 'badge-error', unknown: 'badge-unknown'
+        };
+        return `<span class="badge ${classes[status] || 'badge-unknown'}">${esc(status)}</span>`;
+    }
+
+    /* ==================================================================
+       On page load
+       ================================================================== */
+    window.addEventListener('load', () => {
+        loadGatewayOptions();
+        loadDeviceList('gateway');
+    });
+    </script>
+</body>
+</html>

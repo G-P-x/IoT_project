@@ -11,6 +11,15 @@ from pyngrok import ngrok
 from cloud_platform.application.operator_api import register_operator_routes
 from cloud_platform.telegram_bot.routes.webhook_routes import init_routes
 
+# ── DT Architecture imports ───────────────────────────────────────────
+# These follow the same layered structure as the lecture:
+#   Virtualization → Services → Digital Twin → Application (APIs)
+from cloud_platform.virtualization.digital_replica.schema_registry import SchemaRegistry
+from cloud_platform.services.database_service import DatabaseService
+from cloud_platform.digital_twin.dt_factory import DTFactory
+from cloud_platform.application.dt_api import register_dt_api_blueprints
+from config.config_loader import ConfigLoader
+
 class TelegramBot:
     def __init__(self, cfg: Config):
         self.cfg = cfg
@@ -54,18 +63,68 @@ class FlaskServer:
     """
     This class encapsulates the Flask app and its setup. 
     It creates:
-    - the Flask app and configures it to handle HTTP requests from researchers and operators 
-    
+    - the Flask app and configures it to handle HTTP requests from researchers and operators
+    - the Digital Twin architecture components (SchemaRegistry, DatabaseService, DTFactory)
+      following the lecture's layered pattern
     """
     def __init__(self, cfg: Config, telegram_application=None):
         self.cfg = cfg
         self.app = Flask(__name__, template_folder=cfg.TEMPLATES_DIR, static_folder=cfg.STATIC_DIR)
         CORS(self.app)  # Enable CORS for all routes
+
+        # Initialise the DT architecture components (mirrors the lecture's FlaskServer._init_components)
+        self._init_dt_components()
+
         self._register_blueprints(telegram_application)
 
+    def _init_dt_components(self):
+        """
+        Initialise the full Digital Twin stack and store references in app.config.
+
+        This follows the exact same startup sequence as the lecture's FlaskServer:
+            1. Create a SchemaRegistry and load YAML templates for each DR type.
+            2. Load database config from YAML and connect a DatabaseService.
+            3. Create a DTFactory that ties DB + schemas together.
+            4. Store all three in app.config so Blueprints can access them via
+               current_app.config['DT_FACTORY'], etc.
+        """
+        # ── 1. Schema Registry ────────────────────────────────────────
+        # The registry is the single source of truth for DR structure.
+        # Adding a new DR type only requires a new YAML + one load_schema() call here.
+        schema_registry = SchemaRegistry()
+        schema_registry.load_schema("gateway", "cloud_platform/virtualization/templates/gateway.yaml")
+        schema_registry.load_schema("sensor", "cloud_platform/virtualization/templates/sensor.yaml")
+        schema_registry.load_schema("actuator", "cloud_platform/virtualization/templates/actuator.yaml")
+
+        # ── 2. Database Service ───────────────────────────────────────
+        # Load MongoDB connection details from config/database.yaml
+        db_config = ConfigLoader.load_database_config()
+        connection_string = ConfigLoader.build_connection_string(db_config)
+
+        db_service = DatabaseService(
+            connection_string=connection_string,
+            db_name=db_config["settings"]["name"],
+            schema_registry=schema_registry,
+        )
+        db_service.connect()
+
+        # ── 3. DT Factory ────────────────────────────────────────────
+        # The factory manages the lifecycle of DT documents in MongoDB and
+        # can reconstitute live DigitalTwin objects on demand.
+        dt_factory = DTFactory(db_service, schema_registry)
+
+        # ── 4. Store in app.config for Blueprint access ──────────────
+        self.app.config["SCHEMA_REGISTRY"] = schema_registry
+        self.app.config["DB_SERVICE"] = db_service
+        self.app.config["DT_FACTORY"] = dt_factory
+
     def _register_blueprints(self, telegram_application=None):
+        # Existing routes
         register_operator_routes(self.app)
         init_routes(self.app, telegram_application)
+
+        # DT Architecture API routes (DT CRUD, DR CRUD, service management)
+        register_dt_api_blueprints(self.app)
 
     def run(self, host: str, port: int, debug: bool, application: Application = None):
         """Start the Flask server."""
@@ -75,6 +134,9 @@ class FlaskServer:
         except Exception as e:
             print(f"Error starting Flask server: {e}")
         finally:
+            # Clean up DT database connection on shutdown
+            if "DB_SERVICE" in self.app.config:
+                self.app.config["DB_SERVICE"].disconnect()
             if application and "loop" in application.bot_data:
                 loop = application.bot_data["loop"]
                 loop.call_soon_threadsafe(loop.stop)

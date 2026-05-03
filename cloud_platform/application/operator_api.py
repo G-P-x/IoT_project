@@ -1,6 +1,7 @@
 from flask import Blueprint, current_app, jsonify, request
 from flask import render_template
 from cloud_platform.application import client_http
+from cloud_platform.services.data_ingestion import ingest_edge_results
 from pydantic import BaseModel, ValidationError
 
 # ── Imports for Mock data for testing (delete in production) ──────────────────────────────────
@@ -78,6 +79,10 @@ def history():
 @bp_operator.route("/commands", methods=["GET"])
 def commands():
     return render_template("commands.html")
+
+@bp_operator.route("/manage", methods=["GET"])
+def manage():
+    return render_template("manage.html")
 
 @bp_operator.route("/health", methods=["GET"])
 def health():
@@ -210,6 +215,19 @@ def send_command():
 
     print(f"Received command: {command_id} for twin: {twin_id}, gateways: {gateway_ids}, sensors: {sensor_ids}. from operator: {operator_id}")
     
+    # ── Persist sensor readings into Digital Replicas ──────────────
+    # This is the bridge between the HTTP pull and the DT persistence layer.
+    # For every OK sensor record in the gateway responses, the ingestion service:
+    #   1. Finds (or auto-creates) the matching sensor DR by physical sensor_id
+    #   2. Appends the measurement to sensor DR + gateway DR
+    #   3. Updates current_value on the sensor DR
+    ingestion_summary = {}
+    db_service = current_app.config.get("DB_SERVICE")
+    if db_service and db_service.is_connected():
+        ingestion_summary = ingest_edge_results(db_service, edge_results)
+    else:
+        ingestion_summary = {"warning": "DB_SERVICE not available — data not persisted"}
+
     # Determine overall status
     any_success = any(r["status"] == "success" for r in edge_results.values())
     overall_status = "success" if any_success else "error"
@@ -221,6 +239,7 @@ def send_command():
         "devices": edge_results,
         "connection_status": connection_status,
         "sensor_status": sensors_status,
+        "ingestion": ingestion_summary,
     }), http_code
 
         

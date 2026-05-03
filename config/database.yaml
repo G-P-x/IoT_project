@@ -1,0 +1,17 @@
+# =============================================================================
+# MongoDB Configuration
+# =============================================================================
+# This file follows the same format as the lecture's database.yaml.
+# The ConfigLoader reads this file to build the MongoDB connection string
+# and determine the database name.
+# =============================================================================
+
+database:
+  connection:
+    host: "localhost"
+    port: 27017
+    username: ""      # Leave empty if no authentication is required
+    password: ""      # Leave empty if no authentication is required
+  settings:
+    name: "etna_iot"  # Default database name for the IoT project
+    auth_source: "admin"

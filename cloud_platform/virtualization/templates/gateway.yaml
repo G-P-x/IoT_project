@@ -1,0 +1,74 @@
+# =============================================================================
+# Gateway Digital Replica Template
+# =============================================================================
+# This YAML defines the structure of a Gateway DR — the virtual representation
+# of a physical edge gateway/device that collects sensor data in the field
+# (e.g. on Mt. Etna).
+#
+# Following the lecture pattern, the schema is divided into:
+#   - common_fields : identity + profile + metadata (shared structure)
+#   - entity.data   : domain-specific payload (sensors, status, measurements)
+#   - validations   : mandatory fields, type constraints, and defaults
+# =============================================================================
+
+schemas:
+  common_fields:
+    _id: str                        # MongoDB document ID (UUID)
+    type: str                       # DR type identifier ("gateway")
+    profile:
+      name: str                     # Human-readable gateway name
+      description: str              # Optional description
+      device_id: str                # Physical device identifier (MAC / serial)
+      location: str                 # Deployment location (e.g. "Mt. Etna - North face")
+      ip_address: str               # Network address of the edge device
+      port: int                     # Listening port on the edge device
+    metadata:
+      created_at: datetime          # When this DR was created
+      updated_at: datetime          # Last modification timestamp
+      status: str                   # Operational status
+
+  entity:
+    data:
+      operational_status: str       # Current operational status (active/inactive/maintenance)
+      sensors: List[str]            # List of sensor DR IDs attached to this gateway
+      measurements: List[Dict]      # Aggregated measurements received from sensors
+      last_heartbeat: str           # ISO timestamp of last heartbeat from the device
+
+  validations:
+    mandatory_fields:
+      root:
+        - _id
+        - type
+      profile:
+        - name
+        - device_id
+      metadata:
+        - created_at
+        - updated_at
+        - status
+
+    type_constraints:
+      port:
+        type: int
+        min: 1
+        max: 65535
+      operational_status:
+        type: str
+        enum: ["active", "inactive", "maintenance"]
+      status:
+        type: str
+        enum: ["active", "inactive", "decommissioned"]
+      measurements:
+        type: List[Dict]
+        item_constraints:
+          required_fields: ["measure_type", "value", "timestamp"]
+          type_mappings:
+            timestamp: datetime
+            value: float
+
+    initialization:
+      operational_status: "active"
+      sensors: []
+      measurements: []
+      metadata:
+        status: "active"
