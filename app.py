@@ -1,3 +1,5 @@
+import time
+
 from flask import Flask
 from flask_cors import CORS
 
@@ -35,15 +37,16 @@ class TelegramBot:
             loop.run_forever()
         loop_thread = threading.Thread(target=_run_loop_forever, args=(loop,), daemon=True)
         loop_thread.start()
-        return loop
+        return loop, loop_thread
     
     def _initialise_bot_application(self):
         # Create a persistent event loop and run it in a background thread
-        loop = self._create_persistent_event_loop()
+        loop, loop_thread = self._create_persistent_event_loop()
 
         # Initialize bot application
         self.application = Application.builder().token(self.cfg.TELEGRAM_BOT_TOKEN).build()
         self.application.bot_data["loop"] = loop  # Store loop reference for webhook routes
+        self.application.bot_data["loop_thread"] = loop_thread  # Store loop thread reference for webhook routes
     
 
     def _setup_handlers(self):
@@ -150,10 +153,16 @@ class FlaskServer:
                 self.app.config["DB_SERVICE"].disconnect()
             if application and "loop" in application.bot_data:
                 loop = application.bot_data["loop"]
-                loop.call_soon_threadsafe(loop.stop)
-                loop_thread = application.bot_data.get("loop_thread")
-                if loop_thread:
-                    loop_thread.join()
+                try:
+                    asyncio.run_coroutine_threadsafe(application.stop(), loop).result(timeout=10)
+                    asyncio.run_coroutine_threadsafe(application.shutdown(), loop).result(timeout=10)
+                except Exception as e:
+                    print(f"Error shutting down Telegram bot application: {e}")
+                finally:
+                    loop.call_soon_threadsafe(loop.stop)
+                    loop_thread = application.bot_data.get("loop_thread")
+                    if loop_thread:
+                        loop_thread.join()
 
 # def create_app() -> Flask:
 #     # Expose needed config to Flask
