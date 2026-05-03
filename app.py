@@ -1,9 +1,5 @@
-import time
-
 from flask import Flask
 from flask_cors import CORS
-
-from cloud_platform.telegram_bot.handlers.base_handlers import echo_handler, help_handler, start_handler
 from config.config import Config
 import asyncio
 import threading
