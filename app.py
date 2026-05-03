@@ -45,10 +45,21 @@ class TelegramBot:
         self.application = Application.builder().token(self.cfg.TELEGRAM_BOT_TOKEN).build()
         self.application.bot_data["loop"] = loop  # Store loop reference for webhook routes
     
+
     def _setup_handlers(self):
+        # Importa i nuovi handler
+        from cloud_platform.telegram_bot.handlers.bot_handlers import (
+            start_handler, help_handler, status_handler, chatid_handler, unknown_text_handler
+        )
+
         self.application.add_handler(CommandHandler("start", start_handler))
         self.application.add_handler(CommandHandler("help", help_handler))
-        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, echo_handler))
+        self.application.add_handler(CommandHandler("status", status_handler))
+        self.application.add_handler(CommandHandler("chatid", chatid_handler))
+        
+        # Sostituisce l'echo_handler: risponde a qualsiasi testo che non sia un comando
+        self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown_text_handler))
+        
         asyncio.run_coroutine_threadsafe(self.application.initialize(), self.application.bot_data["loop"]).result()
         asyncio.run_coroutine_threadsafe(self.application.start(), self.application.bot_data["loop"]).result()
 
