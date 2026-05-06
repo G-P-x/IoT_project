@@ -1,0 +1,63 @@
+# =============================================================================
+# Actuator Command History Collection Template
+# =============================================================================
+# This YAML defines an append-only collection used to store actuator command
+# executions over time.
+#
+# The collection keeps the current actuator document separate from its historical
+# timeline. Each document represents a single command event, so the timeline can
+# be reconstructed by sorting events by timestamp.
+# =============================================================================
+
+schemas:
+  common_fields:
+    _id: str                        # MongoDB document ID (UUID)
+    record_type: str                       # DR type identifier ("actuator_command_event")
+    actuator_id: str                 # DR _id of the actuator this event belongs to
+    gateway_id: str               # DR _id of the gateway this actuator is attached to
+
+  entity:
+    data:
+      command: str                  # Command that was executed
+      timestamp: datetime            # Time at which the command was executed
+      result: str                   # Result of the command execution (success, failure, etc.)
+      reason: str                   # Optional reason for failure or additional context
+      source: str                   # Origin of the command (operator, automation, recovery)
+
+  validations:
+    mandatory_fields:
+      root:
+        - _id
+        - record_type
+        - actuator_id
+        - gateway_id
+      data:
+        - command
+        - timestamp
+        - result
+        - source
+
+    type_constraints:
+      record_type:
+        type: str
+        enum: ["actuator_command_event"]
+      actuator_id:
+        type: str
+      gateway_id:
+        type: str
+      command:
+        type: str
+      timestamp:
+        type: datetime
+      result:
+        type: str
+        enum: ["success", "failure", "pending"]
+      reason:
+        type: str
+      source:
+        type: str
+        enum: ["operator"]
+    
+    initialization:
+      root:
+        record_type: "actuator_command_event"

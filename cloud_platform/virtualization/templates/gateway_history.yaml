@@ -1,0 +1,50 @@
+# =============================================================================
+# Gateway Status History Collection Template
+# =============================================================================
+# This YAML defines an append-only collection used to store gateway status
+# transitions over time.
+#
+# The collection keeps the current gateway document separate from its historical
+# timeline. Each document represents a single status event, so the timeline can
+# be reconstructed by sorting events by timestamp.
+# =============================================================================
+
+schemas:
+  common_fields:
+    _id: str                        # MongoDB document ID (UUID)
+    record_type: str                # Record type identifier ("gateway_status_event")
+    gateway_id: str                 # DR _id of the gateway this event belongs to
+
+  entity:
+    data:
+      status: str                   # Gateway status at this point in time
+      timestamp: datetime           # Time at which the status was observed
+      source: str                   # Origin of the event (monitor, operator, recovery)
+
+  validations:
+    mandatory_fields:
+      root:
+        - _id
+        - record_type
+        - gateway_id
+      data:
+        - status
+        - timestamp
+        - source
+
+    type_constraints:
+      record_type:
+        type: str
+        enum: ["gateway_status_event"]
+      status:
+        type: str
+        enum: ["active", "inactive", "maintenance"]
+      timestamp:
+        type: datetime  
+      source:
+        type: str
+        enum: ["monitor"]
+      
+    initialization:
+      root:
+        record_type: "gateway_status_event"

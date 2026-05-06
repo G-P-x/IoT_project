@@ -1,0 +1,58 @@
+# =============================================================================
+# Sensor Readings History Collection Template
+# =============================================================================
+# This YAML defines an append-only collection used to store sensor readings
+# over time.
+#
+# The collection keeps the current sensor document separate from its historical
+# timeline. Each document represents a single sensor reading, so the timeline can
+# be reconstructed by sorting events by timestamp.
+# =============================================================================
+
+schemas:
+  common_fields:
+    _id: str                        # MongoDB document ID (UUID)
+    record_type: str                       # DR type identifier ("sensor_reading_event")
+    sensor_id: str                 # DR _id of the sensor this reading belongs to
+    gateway_id: str               # DR _id of the gateway this sensor is attached to
+
+
+  entity:
+    data:
+      value: float                  # Sensor reading value
+      timestamp: datetime           # Time at which the reading was observed
+      source: str                   # Origin of the reading (monitor, operator, recovery)
+
+  validations:
+    mandatory_fields:
+      root:
+        - _id
+        - record_type
+        - sensor_id
+        - gateway_id
+      data:
+        - value
+        - timestamp
+        - source
+
+    type_constraints:
+      record_type:
+        type: str
+        enum: ["sensor_reading_event"]
+      sensor_id:
+        type: str
+      gateway_id:
+        type: str
+      value:
+        type: float
+      timestamp:
+        type: datetime
+      source:
+        type: str
+        enum: ["telemetry", "operator"]
+
+    initialization:
+      root:
+        record_type: "sensor_reading_event"
+
+    
