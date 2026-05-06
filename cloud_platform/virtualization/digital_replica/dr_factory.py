@@ -126,20 +126,35 @@ class DRFactory:
             self.schema["schemas"].get("validations", {}).get("type_constraints", {})
         )
         data_fields = self.schema["schemas"].get("entity", {}).get("data", {})
+        mandatory_fields = (
+            self.schema["schemas"].get("validations", {}).get("mandatory_fields", {})
+        )
+        mandatory_data_fields = []
+        if isinstance(mandatory_fields, dict):
+            mandatory_data_fields = list(mandatory_fields.get("entity.data", []) or [])
+            if not mandatory_data_fields:
+                mandatory_data_fields = list(mandatory_fields.get("data", []) or [])
 
         field_definitions = {}
         for field_name, field_type in data_fields.items():
+            is_required = field_name in mandatory_data_fields
             if field_type == "List[Dict]":
                 field_definitions[field_name] = (
                     List[Dict[str, Any]],
-                    Field(default_factory=list),
+                    Field(... if is_required else None, default_factory=None if is_required else list),
                 )
             elif field_type == "List[str]":
-                field_definitions[field_name] = (List[str], Field(default_factory=list))
+                field_definitions[field_name] = (
+                    List[str],
+                    Field(... if is_required else None, default_factory=None if is_required else list),
+                )
             else:
                 python_type = self._yaml_type_to_python(field_type)
-                # Wrap in Optional so Pydantic v2 accepts None as default
-                field_definitions[field_name] = (Optional[python_type], Field(None))
+                if is_required:
+                    field_definitions[field_name] = (python_type, Field(...))
+                else:
+                    # Wrap in Optional so Pydantic v2 accepts None as default
+                    field_definitions[field_name] = (Optional[python_type], Field(None))
 
         model = create_model("Data", **field_definitions)
 
@@ -217,10 +232,10 @@ class DRFactory:
         # Scaffold the DR with required fields and timestamps
         dr_dict = {
             "_id": str(uuid.uuid4()),
-            "type": dr_type,
+            "dr_type": dr_type,
             "metadata": {
                 "created_at": datetime.utcnow(),
-                "updated_at": datetime.utcnow(),
+                "last_update": datetime.utcnow(),
             },
             "data": {},
         }
@@ -229,17 +244,25 @@ class DRFactory:
         init_values = (
             self.schema["schemas"].get("validations", {}).get("initialization", {})
         )
+        data_fields = self.schema["schemas"].get("entity", {}).get("data", {})
         for section, defaults in init_values.items():
-            if section == "metadata":
+            if section == "root":
+                dr_dict.update(defaults)
+            elif section == "metadata":
                 dr_dict["metadata"].update(defaults)
             elif section == "profile":
                 # Profile defaults are merged into a 'profile' sub-dict
                 dr_dict.setdefault("profile", {}).update(defaults)
-            elif section in ["status", "sensors", "devices", "measurements"]:
-                # These operational fields live inside 'data'
+            elif section in ["entity.data", "data"]:
+                # Template-level data defaults
+                dr_dict["data"].update(defaults)
+            elif section in data_fields:
                 dr_dict["data"][section] = defaults
             else:
                 dr_dict[section] = defaults
+
+        # Ensure discriminator matches the requested DR type
+        dr_dict["dr_type"] = dr_type
 
         # Validate and merge caller-supplied profile data
         if "profile" in initial_data:
@@ -289,7 +312,7 @@ class DRFactory:
             updated_dr["metadata"].update(updates["metadata"])
 
         # Always bump the timestamp on update
-        updated_dr["metadata"]["updated_at"] = datetime.utcnow()
+        updated_dr["metadata"]["last_update"] = datetime.utcnow()
 
         return updated_dr
 
