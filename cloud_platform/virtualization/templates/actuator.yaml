@@ -1,87 +1,75 @@
-# =============================================================================
-# Actuator Digital Replica Template
-# =============================================================================
-# This YAML defines the structure of an Actuator DR — the virtual representation
-# of a physical actuator deployed on a gateway (e.g. alert siren, warning light,
-# ventilation valve, automated camera positioner).
-#
-# Design note: While sensors *read* the environment, actuators *act on* it.
-# An actuator receives commands from the cloud platform (through its gateway)
-# and reports its execution state back. Typical use-cases in volcanic monitoring:
-#   - Activate an alert siren when seismic thresholds are exceeded
-#   - Engage a gas-line shutoff valve on high SO₂ readings
-#   - Pan/tilt a surveillance camera toward a new vent
-#
-# The schema mirrors the sensor template structure for consistency, but replaces
-# measurement-centric fields with command/state-centric ones.
-# =============================================================================
 
 schemas:
+ 
   common_fields:
     _id: str                        # MongoDB document ID (UUID)
-    type: str                       # DR type identifier ("actuator")
+    dr_type: str                       # DR type identifier ("actuator")
     profile:
       name: str                     # Human-readable actuator name
       actuator_id: str              # Physical actuator identifier (e.g. "84F3EB12A0BC-siren1")
       actuator_type: str            # Kind of actuator (siren, valve, camera, light, relay)
       description: str              # Optional description
       gateway_id: str               # DR _id of the gateway this actuator is attached to
+      location: str                 # Deployment location (e.g. "Mt. Etna - North face")
+
     metadata:
-      created_at: datetime
-      updated_at: datetime
+      created_at: datetime          # ISO timestamp of when this DR was created 
+      last_update: datetime          # ISO timestamp of the latest command executed on the actuator
       status: str                   # Actuator operational status
+      
 
   entity:
     data:
-      current_state: str            # Current actuator state (on / off / partial / unknown)
-      last_command: str             # Last command that was sent to this actuator
-      last_command_at: str          # ISO timestamp of when the last command was issued
-      command_history: List[Dict]   # Historical list of commands and their outcomes
-      measurements: List[Dict]      # Optional feedback measurements (e.g. valve position %)
+      current_command: str             # Last command that was sent to this actuator
 
   validations:
     mandatory_fields:
       root:
         - _id
-        - type
+        - dr_type
       profile:
         - name
         - actuator_id
         - actuator_type
+        - gateway_id # enforce DR_id reference to a gateway
       metadata:
         - created_at
-        - updated_at
+        - last_update
         - status
+      entity.data:
+        - current_command
 
     type_constraints:
+      _id:
+        type: str
+      dr_type:
+        type: str
+        enum: ["actuator"]
+      name:
+        type: str
+      actuator_id:
+        type: str
       actuator_type:
         type: str
         enum: ["siren", "valve", "camera", "light", "relay"]
+      description:
+        type: str
+      gateway_id:
+        type: str
+      created_at:
+        type: datetime
+      last_update:
+        type: datetime
       status:
         type: str
         enum: ["active", "inactive", "faulty", "maintenance"]
-      current_state:
+      current_command:
         type: str
-        enum: ["on", "off", "partial", "unknown"]
-      command_history:
-        type: List[Dict]
-        item_constraints:
-          required_fields: ["command", "timestamp", "result"]
-          type_mappings:
-            timestamp: datetime
-            command: str
-            result: str
-      measurements:
-        type: List[Dict]
-        item_constraints:
-          required_fields: ["measure_type", "value", "timestamp"]
-          type_mappings:
-            timestamp: datetime
-            value: float
 
     initialization:
-      current_state: "off"
-      command_history: []
-      measurements: []
+      root:
+        dr_type: "actuator"
+      profile:
+        name: "actuator"
       metadata:
         status: "active"

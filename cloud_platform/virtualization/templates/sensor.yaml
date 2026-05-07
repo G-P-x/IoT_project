@@ -13,7 +13,7 @@
 schemas:
   common_fields:
     _id: str                        # MongoDB document ID (UUID)
-    type: str                       # DR type identifier ("sensor")
+    dr_type: str                       # DR type identifier ("sensor")
     profile:
       name: str                     # Human-readable sensor name
       sensor_id: str                # Physical sensor identifier (e.g. "84F3EB12A0BC-t1")
@@ -21,15 +21,16 @@ schemas:
       unit: str                     # Measurement unit (°C, AQI, mm/s)
       description: str              # Optional description
       gateway_id: str               # DR _id of the gateway this sensor is attached to
+      location: str                 # Deployment location (e.g. "Mt. Etna - North face")
     metadata:
-      created_at: datetime
-      updated_at: datetime
+      created_at: datetime          # ISO timestamp of when this DR was created
+      last_update: datetime          # ISO timestamp of the latest reading
       status: str                   # Sensor operational status
+      
 
   entity:
     data:
-      current_value: float          # Latest reading
-      measurements: List[Dict]      # Historical readings
+      current_value: float          # Latest reading from the sensor
       alert_threshold_min: float    # Below this value → alert
       alert_threshold_max: float    # Above this value → alert
 
@@ -37,32 +38,56 @@ schemas:
     mandatory_fields:
       root:
         - _id
-        - type
+        - dr_type
       profile:
         - name
         - sensor_id
         - sensor_type
+        - gateway_id # enforce DR_id reference to a gateway
       metadata:
         - created_at
-        - updated_at
+        - last_update
         - status
+      entity.data:
+        - current_value
 
     type_constraints:
+      _id:
+        type: str
+      dr_type:
+        type: str
+        enum: ["sensor"]
+      name:
+        type: str
+      sensor_id:
+        type: str
       sensor_type:
         type: str
         enum: ["temperature", "air_quality", "seismic_waves", "humidity", "gas"]
+      unit:
+        type: str
+      description:
+        type: str
+      gateway_id:
+        type: str
+      created_at:
+        type: datetime
+      last_update:
+        type: datetime
       status:
         type: str
         enum: ["active", "inactive", "faulty", "calibrating"]
-      measurements:
-        type: List[Dict]
-        item_constraints:
-          required_fields: ["measure_type", "value", "timestamp"]
-          type_mappings:
-            timestamp: datetime
-            value: float
+      current_value:
+        type: float
+      alert_threshold_min:
+        type: float
+      alert_threshold_max:
+        type: float
 
     initialization:
+      root:
+        dr_type: "sensor"
+      profile:
+        name: "sensor"
       metadata:
         status: "active"
-      measurements: []
