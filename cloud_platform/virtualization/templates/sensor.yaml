@@ -16,8 +16,8 @@ schemas:
     dr_type: str                       # DR type identifier ("sensor")
     profile:
       name: str                     # Human-readable sensor name
-      sensor_id: str                # Physical sensor identifier (e.g. "84F3EB12A0BC-t1")
-      sensor_type: str              # Kind of sensor (temperature, air_quality, seismic_waves)
+      device_id: str                # Physical sensor identifier (e.g. "84F3EB12A0BC-t1")
+      device_type: str              # Kind of sensor (temperature, air_quality, seismic_waves)
       unit: str                     # Measurement unit (°C, AQI, mm/s)
       description: str              # Optional description
       gateway_id: str               # DR _id of the gateway this sensor is attached to
@@ -41,8 +41,8 @@ schemas:
         - dr_type
       profile:
         - name
-        - sensor_id
-        - sensor_type
+        - device_id
+        - device_type
         - gateway_id # enforce DR_id reference to a gateway
       metadata:
         - created_at
@@ -59,9 +59,9 @@ schemas:
         enum: ["sensor"]
       name:
         type: str
-      sensor_id:
+      device_id:
         type: str
-      sensor_type:
+      device_type:
         type: str
         enum: ["temperature", "air_quality", "seismic_waves", "humidity", "gas"]
       unit:

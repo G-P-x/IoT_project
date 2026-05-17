@@ -6,8 +6,8 @@ schemas:
     dr_type: str                       # DR type identifier ("actuator")
     profile:
       name: str                     # Human-readable actuator name
-      actuator_id: str              # Physical actuator identifier (e.g. "84F3EB12A0BC-siren1")
-      actuator_type: str            # Kind of actuator (siren, valve, camera, light, relay)
+      device_id: str              # Physical actuator identifier (e.g. "84F3EB12A0BC-siren1")
+      device_type: str            # Kind of actuator (siren, valve, camera, light, relay)
       description: str              # Optional description
       gateway_id: str               # DR _id of the gateway this actuator is attached to
       location: str                 # Deployment location (e.g. "Mt. Etna - North face")
@@ -29,8 +29,8 @@ schemas:
         - dr_type
       profile:
         - name
-        - actuator_id
-        - actuator_type
+        - device_id
+        - device_type
         - gateway_id # enforce DR_id reference to a gateway
       metadata:
         - created_at
@@ -47,9 +47,9 @@ schemas:
         enum: ["actuator"]
       name:
         type: str
-      actuator_id:
+      device_id:
         type: str
-      actuator_type:
+      device_type:
         type: str
         enum: ["siren", "valve", "camera", "light", "relay"]
       description:
