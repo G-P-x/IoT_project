@@ -68,29 +68,68 @@ class DatabaseService:
 
     # ── CRUD for Digital Replicas ─────────────────────────────────────
 
-    def save_dr(self, dr_type: str, dr_data: Dict) -> str:
+    def save_history_events(self, event_data: List[Dict]):
         """
-        Persist a new Digital Replica document.
-
-        The collection is chosen via the SchemaRegistry so that all DRs of the
-        same type end up in the same collection (e.g. 'gateway_collection').
+        Specialized method to persist multiple history events with uniqueness constraint on 'timestamp'.
 
         Args:
-            dr_type: The DR type key (e.g. 'gateway', 'sensor').
-            dr_data: The full DR document dict (including '_id').
+            event_data: A list of full event document dicts.
 
         Returns:
-            The string _id of the inserted document.
+            The list of rejected events for logging/debugging.
         """
+        # Check connection before attempting to save
+        if not self.is_connected():
+            raise ConnectionError("Not connected to MongoDB")
+        unique = []  # Track timestamps to enforce uniqueness
+        collection_name = self.schema_registry.get_collection_name("history") # -> 'history_collection'
+        collection = self.db[collection_name]
+        rejected_events = {}  # Track rejected events for logging/debugging
+        for event in event_data:
+            try:
+                # check if an event with the same device_id and timestamp already exists in the collection
+                if collection.find_one({
+                    "device_id": event.get("device_id"),
+                    "timestamp": event.get("timestamp")}):
+
+                    rejected_events[event.get("device_id")] = f"timestamp {event.get('timestamp')} already exists"
+                    continue  # Skip this event and continue with the next one
+                unique.append(event)
+            except Exception as e:
+                raise Exception(f"Failed to save history event: {str(e)}")
+            
+        collection.insert_many(unique)
+        return rejected_events  # Return rejected events for logging/debugging
+        
+    def save_dr(self, dr_data: Dict) -> str:
+        """
+        Update or insert a new Digital Replica document.
+
+        Args:
+            dr_data: The full DR document dict.
+
+        Returns:
+            Success message.
+        """
+        # Check connection before attempting to save
         if not self.is_connected():
             raise ConnectionError("Not connected to MongoDB")
 
+        # having received the DR data, we can look up the collection name from the schema registry perform validation and then save the document to the correct collection.  
+        # This keeps the DB layer generic and decoupled from specific DR types.
+        collection_name = self.schema_registry.get_collection_name("devices") #-> 'devices_collection'
+        collection = self.db[collection_name]
         try:
-            # SchemaRegistry resolves type → collection name
-            collection_name = self.schema_registry.get_collection_name(dr_type)
-            collection = self.db[collection_name]
-            collection.insert_one(dr_data)
-            return str(dr_data["_id"])
+
+            # 1. update the device in the devices collection (enforce uniqueness on 'name' field)
+            existing = collection.find_one({"device_id": dr_data.get("device_id")})
+            if existing:
+                # Update the existing device document
+                collection.update_one({"_id": existing["_id"]}, {"$set": dr_data})
+                return str(existing["_id"])
+            else: # Insert a new device document
+                collection.insert_one(dr_data)
+                return str(dr_data["_id"])
         except Exception as e:
             raise Exception(f"Failed to save Digital Replica: {str(e)}")
 
