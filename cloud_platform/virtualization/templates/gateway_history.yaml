@@ -13,7 +13,7 @@ schemas:
   common_fields:
     _id: str                        # MongoDB document ID (UUID)
     record_type: str                # Record type identifier ("gateway_status_event")
-    gateway_id: str                 # DR _id of the gateway this event belongs to
+    device_id: str                 # DR _id of the gateway this event belongs to
 
   entity:
     data:
@@ -26,7 +26,7 @@ schemas:
       root:
         - _id
         - record_type
-        - gateway_id
+        - device_id
       data:
         - status
         - timestamp

@@ -13,7 +13,7 @@ schemas:
   common_fields:
     _id: str                        # MongoDB document ID (UUID)
     record_type: str                       # DR type identifier ("actuator_command_event")
-    actuator_id: str                 # DR _id of the actuator this event belongs to
+    device_id: str                 # DR _id of the actuator this event belongs to
     gateway_id: str               # DR _id of the gateway this actuator is attached to
 
   entity:
@@ -29,7 +29,7 @@ schemas:
       root:
         - _id
         - record_type
-        - actuator_id
+        - device_id
         - gateway_id
       data:
         - command
@@ -41,7 +41,7 @@ schemas:
       record_type:
         type: str
         enum: ["actuator_command_event"]
-      actuator_id:
+      device_id:
         type: str
       gateway_id:
         type: str
