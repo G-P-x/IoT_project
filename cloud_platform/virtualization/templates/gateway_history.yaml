@@ -11,7 +11,7 @@
 
 schemas:
   common_fields:
-    _id: str                        # MongoDB document ID (UUID)
+    # "_id" managed by mongo db
     record_type: str                # Record type identifier ("gateway_status_event")
     device_id: str                 # DR _id of the gateway this event belongs to
 
@@ -24,7 +24,7 @@ schemas:
   validations:
     mandatory_fields:
       root:
-        - _id
+        # "_id" managed by mongo db
         - record_type
         - device_id
       data:

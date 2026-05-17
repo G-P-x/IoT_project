@@ -48,8 +48,8 @@ def test_dr_factory():
         {
             "profile": {
                 "name": "Sensor A",
-                "sensor_id": "S-01",
-                "sensor_type": "temperature",
+                "device_id": "S-01",
+                "device_type": "temperature",
                 "unit": "C",
                 "description": "Temp sensor",
                 "gateway_id": gateway["_id"],
@@ -71,8 +71,8 @@ def test_dr_factory():
         {
             "profile": {
                 "name": "Actuator A",
-                "actuator_id": "A-01",
-                "actuator_type": "siren",
+                "device_id": "A-01",
+                "device_type": "siren",
                 "description": "Alarm",
                 "gateway_id": gateway["_id"],
                 "location": "Field",
@@ -88,7 +88,7 @@ def test_history_factory():
     gateway_history_factory = HistoryFactory(_template_path("gateway_history.yaml"))
     gateway_event = gateway_history_factory.create_record(
         {
-            "gateway_id": "gw-01",
+            "device_id": "gw-01",
             "data": {
                 "status": "inactive",
                 "timestamp": datetime.now(timezone.utc),
@@ -101,7 +101,7 @@ def test_history_factory():
     sensor_history_factory = HistoryFactory(_template_path("sensor_history.yaml"))
     sensor_event = sensor_history_factory.create_record(
         {
-            "sensor_id": "s-01",
+            "device_id": "s-01",
             "gateway_id": "gw-01",
             "data": {
                 "value": 24.1,
@@ -112,10 +112,10 @@ def test_history_factory():
     )
     assert sensor_event["record_type"] == "sensor_reading_event"
 
-    actuator_history_factory = HistoryFactory(_template_path("attuator_history.yaml"))
+    actuator_history_factory = HistoryFactory(_template_path("actuator_history.yaml"))
     actuator_event = actuator_history_factory.create_record(
         {
-            "actuator_id": "a-01",
+            "device_id": "a-01",
             "gateway_id": "gw-01",
             "data": {
                 "command": "activate",
@@ -138,7 +138,7 @@ def test_schema_registries():
     history_registry = HistorySchemaRegistry()
     history_registry.load_schema("gateway_history", _template_path("gateway_history.yaml"))
     history_registry.load_schema("sensor_history", _template_path("sensor_history.yaml"))
-    history_registry.load_schema("actuator_history", _template_path("attuator_history.yaml"))
+    history_registry.load_schema("actuator_history", _template_path("actuator_history.yaml"))
     assert history_registry.get_validation_schema("gateway_history")
 
 

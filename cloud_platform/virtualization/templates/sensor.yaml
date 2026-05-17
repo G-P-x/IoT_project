@@ -12,7 +12,7 @@
 
 schemas:
   common_fields:
-    _id: str                        # MongoDB document ID (UUID)
+    # "_id" managed by mongo db
     dr_type: str                       # DR type identifier ("sensor")
     profile:
       name: str                     # Human-readable sensor name
@@ -37,7 +37,7 @@ schemas:
   validations:
     mandatory_fields:
       root:
-        - _id
+        # "_id" managed by mongo db
         - dr_type
       profile:
         - name
@@ -52,8 +52,6 @@ schemas:
         - current_value
 
     type_constraints:
-      _id:
-        type: str
       dr_type:
         type: str
         enum: ["sensor"]
