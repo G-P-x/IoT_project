@@ -96,6 +96,12 @@ class HistoryFactory:
             "data": {},
         }
 
+        data_payload = dict(initial_data.get("data", {}))
+        if "timestamp" in data_payload:
+            if "timestamp" not in initial_data:
+                record["timestamp"] = data_payload["timestamp"]
+            data_payload.pop("timestamp", None)
+
         init_values = (
             self.schema["schemas"].get("validations", {}).get("initialization", {})
         )
@@ -122,7 +128,7 @@ class HistoryFactory:
             record.setdefault("metadata", {}).update(initial_data["metadata"])
 
         if "data" in initial_data:
-            data = DataModel(**{**record["data"], **initial_data["data"]})
+            data = DataModel(**{**record["data"], **data_payload})
             record["data"] = data.model_dump(exclude_unset=True)
         elif record["data"]:
             data = DataModel(**record["data"])

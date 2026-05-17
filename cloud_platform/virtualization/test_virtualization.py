@@ -89,9 +89,9 @@ def test_history_factory():
     gateway_event = gateway_history_factory.create_record(
         {
             "device_id": "gw-01",
+            "timestamp": datetime.now(timezone.utc),
             "data": {
                 "status": "inactive",
-                "timestamp": datetime.now(timezone.utc),
                 "source": "monitor",
             },
         }
@@ -103,9 +103,9 @@ def test_history_factory():
         {
             "device_id": "s-01",
             "gateway_id": "gw-01",
+            "timestamp": datetime.now(timezone.utc),
             "data": {
                 "value": 24.1,
-                "timestamp": datetime.now(timezone.utc),
                 "source": "telemetry",
             },
         }
@@ -117,9 +117,9 @@ def test_history_factory():
         {
             "device_id": "a-01",
             "gateway_id": "gw-01",
+            "timestamp": datetime.now(timezone.utc),
             "data": {
                 "command": "activate",
-                "timestamp": datetime.now(timezone.utc),
                 "result": "success",
                 "source": "operator",
             },

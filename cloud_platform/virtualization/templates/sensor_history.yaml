@@ -15,12 +15,12 @@ schemas:
     record_type: str                       # DR type identifier ("sensor_reading_event")
     device_id: str                 # DR _id of the sensor this reading belongs to
     gateway_id: str               # DR _id of the gateway this sensor is attached to
+    timestamp: datetime           # Time at which the reading was observed
 
 
   entity:
     data:
       value: float                  # Sensor reading value
-      timestamp: datetime           # Time at which the reading was observed
       source: str                   # Origin of the reading (monitor, operator, recovery)
 
   validations:
@@ -30,9 +30,9 @@ schemas:
         - record_type
         - device_id
         - gateway_id
+        - timestamp
       data:
         - value
-        - timestamp
         - source
 
     type_constraints:
@@ -43,10 +43,10 @@ schemas:
         type: str
       gateway_id:
         type: str
-      value:
-        type: float
       timestamp:
         type: datetime
+      value:
+        type: float
       source:
         type: str
         enum: ["telemetry", "operator"]

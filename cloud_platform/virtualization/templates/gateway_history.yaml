@@ -14,11 +14,11 @@ schemas:
     # "_id" managed by mongo db
     record_type: str                # Record type identifier ("gateway_status_event")
     device_id: str                 # DR _id of the gateway this event belongs to
+    timestamp: datetime            # Time at which the status was observed
 
   entity:
     data:
       status: str                   # Gateway status at this point in time
-      timestamp: datetime           # Time at which the status was observed
       source: str                   # Origin of the event (monitor, operator, recovery)
 
   validations:
@@ -27,20 +27,20 @@ schemas:
         # "_id" managed by mongo db
         - record_type
         - device_id
+        - timestamp
       data:
         - status
-        - timestamp
         - source
 
     type_constraints:
       record_type:
         type: str
         enum: ["gateway_status_event"]
+      timestamp:
+        type: datetime
       status:
         type: str
         enum: ["active", "inactive", "maintenance"]
-      timestamp:
-        type: datetime  
       source:
         type: str
         enum: ["monitor"]

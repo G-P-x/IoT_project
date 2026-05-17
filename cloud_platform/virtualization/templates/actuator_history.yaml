@@ -15,11 +15,11 @@ schemas:
     record_type: str                       # DR type identifier ("actuator_command_event")
     device_id: str                 # DR _id of the actuator this event belongs to
     gateway_id: str               # DR _id of the gateway this actuator is attached to
+    timestamp: datetime            # Time at which the command was executed
 
   entity:
     data:
       command: str                  # Command that was executed
-      timestamp: datetime            # Time at which the command was executed
       result: str                   # Result of the command execution (success, failure, etc.)
       reason: str                   # Optional reason for failure or additional context
       source: str                   # Origin of the command (operator, automation, recovery)
@@ -31,9 +31,9 @@ schemas:
         - record_type
         - device_id
         - gateway_id
+        - timestamp
       data:
         - command
-        - timestamp
         - result
         - source
 
