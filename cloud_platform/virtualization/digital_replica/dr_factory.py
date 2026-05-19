@@ -55,6 +55,7 @@ class DRFactory:
 
     @staticmethod
     def _as_optional_type(python_type):
+        # Normalize to Optional[T] without nesting Optional[Optional[T]].
         origin = get_origin(python_type)
         if origin is Union and type(None) in get_args(python_type):
             return python_type
@@ -68,6 +69,7 @@ class DRFactory:
     def _build_enum_validator(field_name: str, enum_values: List[Any]):
         @field_validator(field_name)
         def _validate_enum(cls, value, enum_values=tuple(enum_values), field_name=field_name):
+            # Allow None; nullability is handled by schema rules.
             if value is None:
                 return value
             if value not in enum_values:
@@ -80,7 +82,9 @@ class DRFactory:
     def _build_list_items_validator(
         field_name: str, required_fields: List[str], type_mappings: Dict[str, str]
     ):
-        @field_validator(field_name)
+
+        @field_validator(field_name) # This pydantic decorator registers the function below (_validate_list_items) as a validator for the specified field_name.
+        # This way, every time the field is set/parsed, the _validate_list_items function will be called to check the contents of the list against the defined rules.
         def _validate_list_items(
             cls,
             value,
@@ -88,6 +92,7 @@ class DRFactory:
             required_fields=tuple(required_fields),
             type_mappings=type_mappings,
         ):
+            # Validate list items against per-item schema rules from YAML.
             if value is None:
                 return value
             if not isinstance(value, list):
@@ -126,6 +131,7 @@ class DRFactory:
         type_constraints = (
             self.schema["schemas"].get("validations", {}).get("type_constraints", {})
         )
+        # Assemble field definitions and validators for create_model.
         field_definitions = {}
         validators = {}
 
