@@ -22,7 +22,7 @@ Architecture reasoning (from the lecture):
 """
 
 from datetime import datetime
-from typing import Dict, Any, Optional, Type, List
+from typing import Dict, Any, Optional, Type, List, get_args, get_origin, Union
 from pydantic import BaseModel, create_model, Field, field_validator
 import yaml
 import uuid
@@ -51,6 +51,117 @@ class DRFactory:
         except Exception as e:
             raise ValueError(f"Failed to load schema: {str(e)}")
 
+    # ── Schema helpers ───────────────────────────────────────────────
+
+    @staticmethod
+    def _as_optional_type(python_type):
+        origin = get_origin(python_type)
+        if origin is Union and type(None) in get_args(python_type):
+            return python_type
+        return Optional[python_type]
+
+    @staticmethod
+    def _is_nullable(rules: Dict[str, Any]) -> bool:
+        return rules.get("nullable") is True or rules.get("type") == "nullable"
+
+    @staticmethod
+    def _build_enum_validator(field_name: str, enum_values: List[Any]):
+        @field_validator(field_name)
+        def _validate_enum(cls, value, enum_values=tuple(enum_values), field_name=field_name):
+            if value is None:
+                return value
+            if value not in enum_values:
+                raise ValueError(f"{field_name} must be one of {list(enum_values)}")
+            return value
+
+        return _validate_enum
+
+    @staticmethod
+    def _build_list_items_validator(
+        field_name: str, required_fields: List[str], type_mappings: Dict[str, str]
+    ):
+        @field_validator(field_name)
+        def _validate_list_items(
+            cls,
+            value,
+            field_name=field_name,
+            required_fields=tuple(required_fields),
+            type_mappings=type_mappings,
+        ):
+            if value is None:
+                return value
+            if not isinstance(value, list):
+                raise ValueError(f"{field_name} must be a list")
+            for idx, item in enumerate(value):
+                if not isinstance(item, dict):
+                    raise ValueError(f"Item {idx} in {field_name} must be a dict")
+                missing = [f for f in required_fields if f not in item]
+                if missing:
+                    raise ValueError(f"Missing required fields {missing} in item {idx}")
+                for key, expected_type in type_mappings.items():
+                    if key in item:
+                        val = item[key]
+                        if expected_type == "datetime":
+                            if not isinstance(val, (datetime, str)):
+                                raise ValueError(
+                                    f"Field {key} in item {idx} must be a datetime"
+                                )
+                        elif expected_type == "float":
+                            try:
+                                item[key] = float(val)
+                            except (TypeError, ValueError):
+                                raise ValueError(
+                                    f"Field {key} in item {idx} must be a number"
+                                )
+            return value
+
+        return _validate_list_items
+
+    def _create_section_model(
+        self, name: str, fields: Dict[str, Any], mandatory_fields: List[str]
+    ) -> Optional[Type[BaseModel]]:
+        if not fields:
+            return None
+
+        type_constraints = (
+            self.schema["schemas"].get("validations", {}).get("type_constraints", {})
+        )
+        field_definitions = {}
+        validators = {}
+
+        for field_name, field_type in fields.items():
+            is_required = field_name in mandatory_fields
+            rules = type_constraints.get(field_name, {})
+            constraints = {}
+
+            if "min" in rules:
+                constraints["ge"] = rules["min"]
+            if "max" in rules:
+                constraints["le"] = rules["max"]
+
+            python_type = self._yaml_type_to_python(field_type)
+            if is_required:
+                if self._is_nullable(rules):
+                    python_type = self._as_optional_type(python_type)
+                field_definitions[field_name] = (
+                    python_type,
+                    Field(..., **constraints),
+                )
+            else:
+                if self._is_nullable(rules):
+                    python_type = self._as_optional_type(python_type)
+                field_definitions[field_name] = (
+                    python_type,
+                    Field(None, **constraints),
+                )
+
+            if "enum" in rules:
+                validators[f"validate_enum_{field_name}"] = self._build_enum_validator(
+                    field_name, rules["enum"]
+                )
+
+        return create_model(name, __validators__=validators, **field_definitions)
+
     # ── Dynamic Pydantic model creation ───────────────────────────────
     # The lecture builds Pydantic models on the fly so that validation rules
     # are defined once (in YAML) and enforced everywhere.
@@ -70,49 +181,39 @@ class DRFactory:
             .get("mandatory_fields", {})
             .get("profile", [])
         )
-        type_constraints = (
-            self.schema["schemas"].get("validations", {}).get("type_constraints", {})
-        )
-
-        field_definitions = {}
         profile_fields = self.schema["schemas"]["common_fields"].get("profile", {})
+        model = self._create_section_model("Profile", profile_fields, list(mandatory_fields))
+        return model or create_model("Profile")
 
-        for field_name, field_type in profile_fields.items():
-            is_required = field_name in mandatory_fields
-            constraints = {}
+    def _create_root_model(self) -> Optional[Type[BaseModel]]:
+        """Build a Pydantic model for top-level (root) fields like 'dr_type'."""
+        common_fields = self.schema["schemas"].get("common_fields", {})
+        root_fields = {
+            field_name: field_type
+            for field_name, field_type in common_fields.items()
+            if field_name not in ("profile", "metadata")
+            and not isinstance(field_type, dict)
+        }
+        mandatory_fields = (
+            self.schema["schemas"]
+            .get("validations", {})
+            .get("mandatory_fields", {})
+            .get("root", [])
+        )
+        return self._create_section_model("Root", root_fields, list(mandatory_fields))
 
-            # Apply numeric range constraints if defined
-            if field_name in type_constraints:
-                rules = type_constraints[field_name]
-                if "min" in rules:
-                    constraints["ge"] = rules["min"]
-                if "max" in rules:
-                    constraints["le"] = rules["max"]
-
-            # Map YAML type strings to Python types
-            python_type = self._yaml_type_to_python(field_type)
-
-            field_definitions[field_name] = (
-                python_type,
-                Field(... if is_required else None, **constraints),
-            )
-
-        model = create_model("Profile", **field_definitions)
-
-        # Attach enum validators where needed
-        for field_name in field_definitions:
-            if field_name in type_constraints and "enum" in type_constraints[field_name]:
-                enum_values = type_constraints[field_name]["enum"]
-
-                @field_validator(field_name)
-                def validate_enum(value, field):
-                    if value not in enum_values:
-                        raise ValueError(f"{field.name} must be one of {enum_values}")
-                    return value
-
-                setattr(model, f"validate_{field_name}", validate_enum)
-
-        return model
+    def _create_metadata_model(self) -> Optional[Type[BaseModel]]:
+        """Build a Pydantic model for the 'metadata' section of the DR."""
+        metadata_fields = self.schema["schemas"]["common_fields"].get("metadata", {})
+        mandatory_fields = (
+            self.schema["schemas"]
+            .get("validations", {})
+            .get("mandatory_fields", {})
+            .get("metadata", [])
+        )
+        return self._create_section_model(
+            "Metadata", metadata_fields, list(mandatory_fields)
+        )
 
     def _create_data_model(self) -> Type[BaseModel]:
         """
@@ -134,75 +235,82 @@ class DRFactory:
             mandatory_data_fields = list(mandatory_fields.get("entity.data", []) or [])
             if not mandatory_data_fields:
                 mandatory_data_fields = list(mandatory_fields.get("data", []) or [])
-
         field_definitions = {}
+        validators = {}
+
         for field_name, field_type in data_fields.items():
             is_required = field_name in mandatory_data_fields
+            rules = type_constraints.get(field_name, {})
+            constraints = {}
+
+            if "min" in rules:
+                constraints["ge"] = rules["min"]
+            if "max" in rules:
+                constraints["le"] = rules["max"]
+
             if field_type == "List[Dict]":
-                field_definitions[field_name] = (
-                    List[Dict[str, Any]],
-                    Field(... if is_required else None, default_factory=None if is_required else list),
-                )
-            elif field_type == "List[str]":
-                field_definitions[field_name] = (
-                    List[str],
-                    Field(... if is_required else None, default_factory=None if is_required else list),
-                )
-            else:
-                python_type = self._yaml_type_to_python(field_type)
+                python_type = List[Dict[str, Any]]
+                if self._is_nullable(rules):
+                    python_type = self._as_optional_type(python_type)
                 if is_required:
                     field_definitions[field_name] = (python_type, Field(...))
                 else:
-                    # Wrap in Optional so Pydantic v2 accepts None as default
-                    field_definitions[field_name] = (Optional[python_type], Field(None))
+                    if self._is_nullable(rules):
+                        field_definitions[field_name] = (python_type, Field(None))
+                    else:
+                        field_definitions[field_name] = (
+                            python_type,
+                            Field(default_factory=list),
+                        )
 
-        model = create_model("Data", **field_definitions)
-
-        # Add validators for List[Dict] fields with item_constraints
-        for field_name, field_type in data_fields.items():
-            if field_name in type_constraints and "enum" in type_constraints[field_name]:
-                enum_values = type_constraints[field_name]["enum"]
-
-                @field_validator(field_name)
-                def validate_enum(value, field):
-                    if value not in enum_values:
-                        raise ValueError(f"{field.name} must be one of {enum_values}")
-                    return value
-
-                setattr(model, f"validate_{field_name}", validate_enum)
-
-            if field_type == "List[Dict]" and field_name in type_constraints:
-                rules = type_constraints[field_name]
                 if "item_constraints" in rules:
                     item_rules = rules["item_constraints"]
                     required_fields = item_rules.get("required_fields", [])
                     type_mappings = item_rules.get("type_mappings", {})
+                    validators[
+                        f"validate_items_{field_name}"
+                    ] = self._build_list_items_validator(
+                        field_name, required_fields, type_mappings
+                    )
 
-                    @field_validator(field_name)
-                    def validate_list_items(value, field):
-                        if not isinstance(value, list):
-                            raise ValueError(f"{field.name} must be a list")
-                        for idx, item in enumerate(value):
-                            if not isinstance(item, dict):
-                                raise ValueError(f"Item {idx} in {field.name} must be a dict")
-                            missing = [f for f in required_fields if f not in item]
-                            if missing:
-                                raise ValueError(f"Missing required fields {missing} in item {idx}")
-                            for key, expected_type in type_mappings.items():
-                                if key in item:
-                                    val = item[key]
-                                    if expected_type == "datetime":
-                                        if not isinstance(val, (datetime, str)):
-                                            raise ValueError(f"Field {key} in item {idx} must be a datetime")
-                                    elif expected_type == "float":
-                                        try:
-                                            item[key] = float(val)
-                                        except (TypeError, ValueError):
-                                            raise ValueError(f"Field {key} in item {idx} must be a number")
-                        return value
+            elif field_type == "List[str]":
+                python_type = List[str]
+                if self._is_nullable(rules):
+                    python_type = self._as_optional_type(python_type)
+                if is_required:
+                    field_definitions[field_name] = (python_type, Field(...))
+                else:
+                    if self._is_nullable(rules):
+                        field_definitions[field_name] = (python_type, Field(None))
+                    else:
+                        field_definitions[field_name] = (
+                            python_type,
+                            Field(default_factory=list),
+                        )
 
-                    setattr(model, f"validate_{field_name}", validate_list_items)
+            else:
+                python_type = self._yaml_type_to_python(field_type)
+                if self._is_nullable(rules):
+                    python_type = self._as_optional_type(python_type)
+                if is_required:
+                    field_definitions[field_name] = (
+                        python_type,
+                        Field(..., **constraints),
+                    )
+                else:
+                    if self._is_nullable(rules):
+                        python_type = self._as_optional_type(python_type)
+                    field_definitions[field_name] = (
+                        python_type,
+                        Field(None, **constraints),
+                    )
 
+            if "enum" in rules:
+                validators[f"validate_enum_{field_name}"] = self._build_enum_validator(
+                    field_name, rules["enum"]
+                )
+
+        model = create_model("Data", __validators__=validators, **field_definitions)
         return model
 
     # ── DR creation ───────────────────────────────────────────────────
@@ -226,8 +334,10 @@ class DRFactory:
             A complete DR document dict.
         """
         # Dynamically build Pydantic models from the YAML schema
+        RootModel = self._create_root_model()
         ProfileModel = self._create_profile_model()
         DataModel = self._create_data_model()
+        MetadataModel = self._create_metadata_model()
 
         # Scaffold the DR with required fields and timestamps
         dr_dict = {
@@ -244,6 +354,8 @@ class DRFactory:
         init_values = (
             self.schema["schemas"].get("validations", {}).get("initialization", {})
         )
+        if "root" in init_values and "_id" in (init_values.get("root") or {}):
+            raise ValueError("Initialization defaults must not set _id")
         data_fields = self.schema["schemas"].get("entity", {}).get("data", {})
         for section, defaults in init_values.items():
             if section == "root":
@@ -264,19 +376,39 @@ class DRFactory:
         # Ensure discriminator matches the requested DR type
         dr_dict["dr_type"] = dr_type
 
-        # Validate and merge caller-supplied profile data
+        # Caller must not override the generated _id
+        if "_id" in initial_data:
+            raise ValueError("Caller must not provide _id")
+
+        # Validate and merge profile data (defaults + caller values)
+        profile_payload = dr_dict.get("profile", {})
         if "profile" in initial_data:
-            profile = ProfileModel(**initial_data["profile"])
+            profile_payload = {**profile_payload, **initial_data["profile"]}
+        if ProfileModel is not None:
+            profile = ProfileModel(**profile_payload)
             dr_dict["profile"] = profile.model_dump(exclude_unset=True)
 
-        # Validate and merge caller-supplied entity data
-        if "data" in initial_data:
-            data = DataModel(**{**dr_dict["data"], **initial_data["data"]})
+        # Validate and merge entity data (defaults + caller values)
+        data_payload = {**dr_dict["data"], **initial_data.get("data", {})}
+        if DataModel is not None:
+            data = DataModel(**data_payload)
             dr_dict["data"] = data.model_dump(exclude_unset=True)
 
         # Merge any extra metadata supplied by the caller
         if "metadata" in initial_data:
             dr_dict["metadata"].update(initial_data["metadata"])
+
+        if MetadataModel is not None:
+            metadata = MetadataModel(**dr_dict["metadata"])
+            dr_dict["metadata"] = metadata.model_dump(exclude_unset=True)
+
+        # Validate root fields (e.g., dr_type)
+        if RootModel is not None:
+            root_payload = {
+                field: dr_dict.get(field) for field in RootModel.model_fields.keys()
+            }
+            root = RootModel(**root_payload)
+            dr_dict.update(root.model_dump(exclude_unset=True))
 
         return dr_dict
 
@@ -293,10 +425,14 @@ class DRFactory:
         Returns:
             The updated DR dict.
         """
+        RootModel = self._create_root_model()
         ProfileModel = self._create_profile_model()
         DataModel = self._create_data_model()
+        MetadataModel = self._create_metadata_model()
 
         updated_dr = dr.copy()
+        updated_dr.setdefault("metadata", {})
+        updated_dr.setdefault("data", {})
 
         if "profile" in updates:
             current_profile = updated_dr.get("profile", {})
@@ -313,6 +449,17 @@ class DRFactory:
 
         # Always bump the timestamp on update
         updated_dr["metadata"]["last_update"] = datetime.utcnow()
+
+        if MetadataModel is not None:
+            metadata = MetadataModel(**updated_dr["metadata"])
+            updated_dr["metadata"] = metadata.model_dump(exclude_unset=True)
+
+        if RootModel is not None:
+            root_payload = {
+                field: updated_dr.get(field) for field in RootModel.model_fields.keys()
+            }
+            root = RootModel(**root_payload)
+            updated_dr.update(root.model_dump(exclude_unset=True))
 
         return updated_dr
 
