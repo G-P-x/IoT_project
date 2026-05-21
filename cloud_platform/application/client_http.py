@@ -2,6 +2,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 from config.config import Config
+from datetime import datetime, timezone
 
 # payload format:
 # {
@@ -16,7 +17,7 @@ AIR_QUALITY = 3
 logger = logging.getLogger(__name__)
 cfg = Config()
 
-
+CUSTOM_ERROR_CODE = 104 # code error to use when the request fails and we don't have a response object to get the status code from. 
 
 def _build_url(base_url):
     """Build the notify endpoint URL for a given device base URL."""
@@ -178,49 +179,139 @@ def send_command_to_all_devices(command, sensors=None, device_ids=None, twin_id=
 def _build_poll_url(base_url: str) -> str:
     return base_url.rstrip("/") + cfg.POLL_ENDPOINT
 
-def _normalize_poll_body(body):
-    records = []
-    for item in body:
-        rec = item.get("record", {})
-        records.append({
-            "status": rec.get("status"),
-            "type": rec.get("type", "sensor"),
-            "id": rec.get("id"),
-            "value": rec.get("value"),
-            "timestamp": rec.get("timestamp"),
-        })
-    time_stamp = body[-1].get("time_stamp") if body else None
-    return {"time_stamp": time_stamp, "records": records}
+def _normalize_result(result):
+    '''
+    Normalize the result from a gateway poll into a consistent format for data processing.
 
-def _poll_gateway(url):
+    Args:
+    result: The raw result dict from _poll_gateway, expected to have "status", "code", "req_timestamp", and "body" keys.
+    
+    Returns:
+    A normalized dict with the following structure:
+    {
+        "gateway_info": {
+            "status": "success" | "error",
+            "code": HTTP status code (if success),
+            "error": Error message (if error),
+            "req_timestamp": Timestamp of the poll request
+        },
+        "records": {
+            record_id: {
+                "type": sensor/actuator,
+                "status": OK/error,
+                "severity": severity level (if error),
+                "value": sensor value (if success),
+                "message": message from the gateway,
+                "timestamp": timestamp of the record at the sensor/actuator level
+            },
+            ...
+        }
+    }
+    '''
+    if not isinstance(result, dict) or "status" not in result:
+        raise ValueError("Invalid result format: expected a dict with a 'status' key")
+    
+    def _normalize_poll_body(body):
+            if not isinstance(body, list):
+                return {}
+            records = {}
+            for json_item in body:
+                if not isinstance(json_item, dict) or "record" not in json_item:
+                    continue
+                rec = json_item.get("record", {})
+                records[rec.get("id")] = {
+                    "type": rec.get("type", "sensor"),
+                    "status": rec.get("status"),
+                    "severity": rec.get("severity"),
+                    "value": rec.get("value"),
+                    "message": rec.get("message"),
+                    "timestamp": rec.get("timestamp"),
+                }
+            
+            return records
+    
+    normalized = {
+        "gateway_info": {
+            "status": result.get("status"),
+            "code": result.get("code"),
+            "error": result.get("error") if result.get("status") == "error" else None,
+            "req_timestamp": result.get("req_timestamp"),
+        },
+        "records": _normalize_poll_body(result.get("body", [])) if result.get("status") == "success" else {},
+    }
+    
+    # If not successful or unrecognized format, return as is
+    return normalized
+
+def _poll_gateway(url) -> dict:
+    '''
+    Poll a single gateway for new data.
+    Returns:
+        A List of json objects with the following structure:
+        [
+            {
+                "time_stamp": "2026-05-05T14:30:00.000Z", # when the data was recorded at the gateway
+                "record": {
+                    "id": "mpu6050_01",
+                    "type": "accelerometer",
+                    "status": "ERROR",
+                    "severity": "critical",
+                    "value": null,
+                    "message": "MPU-6050 connection lost",
+                    "timestamp": "2026-02-16T15:40:12Z" # when the record was recorded at the sensor/actuator level
+                }
+            },
+            ...
+        ]
+    '''
     try:
         resp = requests.get(url, timeout=10)
         resp.raise_for_status()
         body = resp.json()
-        return {"status": "success", "code": resp.status_code, "body": _normalize_poll_body(body)}
+        return {"status": "success", "code": resp.status_code, "req_timestamp": datetime.now(timezone.utc).isoformat(), "body": body}
     except requests.RequestException as e:
         logger.error("HTTP poll → %s failed: %s", url, e)
-        return {"status": "error", "error": str(e)}
+        return {"status": "error", "code": CUSTOM_ERROR_CODE, "error": str(e), "req_timestamp": datetime.now(timezone.utc).isoformat()}
 
+# no caller for now. This function will be used to automatically poll gateways at regular intervals (e.g. every minute) to check for new data or alerts.
 def poll_gateways():
-    # Initialize results dictionary
+    '''
+    Poll all gateways for new data.
+    '''
     results = {}
+    
 
     with ThreadPoolExecutor(max_workers=len(cfg.EDGE_DEVICES) or 1) as executor:
-        # Submit one polling task per gateway
-        future_to_device = {
-            executor.submit(_poll_gateway, _build_poll_url(url)): device_id
-            for device_id, url in cfg.EDGE_DEVICES.items()
+        # Submit one polling task per  gateway
+        future_to_gateway = {
+            executor.submit(_poll_gateway, _build_poll_url(url)): gateway_id
+            for gateway_id, url in cfg.EDGE_DEVICES.items()
         }
+        # creates a dict mapping Future (an object created by executor.submit) → gateway_id, so we can identify which gateway corresponds 
+        # to each completed Future later on. The keys of future_to_gateway are Future objects representing the asynchronous execution 
+        # of _poll_gateway for each gateway, and the values are the corresponding gateway IDs.
+        # This allows us to track which Future corresponds to which gateway when we collect results
 
     # Collect results as they complete
-    for future in as_completed(future_to_device):
-        device_id = future_to_device[future]
+    for future in as_completed(future_to_gateway):
+        gateway_id = future_to_gateway[future]
         try:
-            result = future.result()
-            results[device_id] = result
+            result = future.result() # Waits for the Future to complete and retrieves its result. 
+            # If the Future completed successfully, result will contain the return value of _poll_gateway.
+            results[gateway_id] = _normalize_result(result) # Store the result in the results dict, keyed by gateway_id. 
+            #  Each result is a dict with "status", "code", "body" (if success) or "error" (if error).
         except Exception as e:
-            results[device_id] = {"status": "error", "error": str(e)}
+            print(f"Error polling gateway {gateway_id}: {e}")
+            results[gateway_id] = _normalize_result({"status": "error", "code": CUSTOM_ERROR_CODE, "error": str(e), "req_timestamp": datetime.now(timezone.utc).isoformat()})
+            # results[gateway_id] = {
+            #     "gateway_info": {
+            #          "status": "error", 
+            #          "code": CUSTOM_ERROR_CODE, 
+            #          "error": str(e), 
+            #          "req_timestamp": datetime.now(timezone.utc).isoformat()
+            #         },
+            #     "records": {}
+            #    }
     return results
 
 
@@ -293,8 +384,8 @@ if __name__ == "__main__":
     print("=" * 60)
     with patch("cloud_platform.application.client_http.requests.post", side_effect=mock_post):
         results = send_command_to_all_devices("cmd_01", sensors=["t1"])
-        for device_id, res in results.items():
-            print(f"\n  [{device_id}]")
+        for gateway_id, res in results.items():
+            print(f"\n  [{gateway_id}]")
             print(f"    status: {res['status']}")
             if res["status"] == "success":
                 print(f"    code:   {res['code']}")
@@ -308,8 +399,8 @@ if __name__ == "__main__":
     print("=" * 60)
     with patch("cloud_platform.application.client_http.requests.post", side_effect=mock_post):
         results = send_command_to_all_devices("cmd_01", device_ids=["device_01", "device_03"])
-        for device_id, res in results.items():
-            print(f"\n  [{device_id}]")
+        for gateway_id, res in results.items():
+            print(f"\n  [{gateway_id}]")
             print(f"    status: {res['status']}")
             if res["status"] == "success":
                 print(f"    code:   {res['code']}")
