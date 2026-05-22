@@ -3,6 +3,7 @@ from flask import render_template
 from cloud_platform.application import client_http
 from cloud_platform.services.data_ingestion import ingest_edge_results
 from pydantic import BaseModel, ValidationError
+from typing import Literal
 
 # ── Imports for Mock data for testing (delete in production) ──────────────────────────────────
 from datetime import datetime, timedelta
@@ -18,53 +19,174 @@ import random
 # 6. View sensor status and diagnostics
 
 # ── pydantic for enhanced data validation ──────────────────────────────────────────
+class GatewayInfo(BaseModel):
+    status: Literal["success", "error"]
+    code: int
+    error: str | None = None
+    req_timestamp: str
+
+class FieldDeviceResult(BaseModel):
+    type: str                    # "temperature sensor" or "air quality sensor", etc.
+    status: str                    # "ERROR" or "OK"
+    severity: str                  # "critical", "warning", "info"
+    value: float | None          # present if status is OK
+    message: str                # "reading acquired" or "invalid sensor_id", etc.
+    timestamp: str              # ISO datetime string of when the reading was taken
+
 class DeviceResult(BaseModel):
-    # edge_results_structure = {
-    #     device_id: {
-    #         "status": "success" or "error",
-    #         "code": 200 or error_code,     # present on success
-    #         "body": { ... } or "text",      # present on success
-    #         "error": "error message"         # present on error
-    #     }
-    # }
-    status: str                    # "success" or "error"
-    code: int | None = None        # HTTP status code (only on success)
-    body: dict | str | None = None # Response body (only on success)
-    error: str | None = None       # Error description (only on error)
-    # The body should be this format:
-    # {
-    #     "time_stamp": "2024-06-01T12:00:00Z",
-    #     "records": [
-    #         {
-    #             "status": "OK",
-    #             "type": "sensor",
-    #             "id": "84F3EB12A0BC-t1",
-    #             "value": 24.8,
-    #             "message": "Temperature acquired",
-    #             "timestamp": "2026-02-16T15:40:12
-    #         },
-    #         {
-    #             "status": "OK",
-    #             "type": "sensor",
-    #             "id": "84F3EB12A0BC-aq1",
-    #             "value": 10.2,
-    #             "timestamp": "2024-06-01T12:00:00
-    #         },
-    #         {
-    #             "status": "ERROR",
-    #             "type": "sensor",
-    #             "id": "84F3EB12A0BC-x1",
-    #             "value": null,
-    #             "message": "Invalid sensor_id",
-    #             "timestamp": "2026-02-16T15:40:12"
-    #         }
-    #     ]
+    gateway_info: GatewayInfo
+    records: dict[str, FieldDeviceResult]
 
-# Pydantic v2 RootModel replaces v1's __root__
 class EdgeResults(BaseModel):
-    edge : dict[str, DeviceResult]  # device_id -> DeviceResult
+    edge: dict[str, DeviceResult]  # gateway_id → DeviceResult
+
+# ────────────────── Command Dispatcher ──────────────────
+class CommandDispatcher:
+    """
+    This class encapsulates the logic for sending commands to edge devices and processing their responses.
+    It can be extended in the future to support different types of commands, more complex routing logic, etc.
+    """
+    def __init__(self):
+        self.client = client_http
+        self.commands_map = {
+            "cmd_01": self._send_command_to_sensors,
+            "cmd_02": self._send_command_to_actuators
+        }
+
+    def send_command(self, command: str, target: dict[str, list[str]]) -> dict:
+        """
+        Send the specified command to the target devices and return their responses.
+
+            Args:
+
+        - command: str 
+
+            "cmd_01"
+
+        - target: dict mapping gateway IDs to lists of sensor IDs.
+
+            {
+                "gateway_id (e.g. gw_01)": ["temp_01", "temp_02"],  
+                "gw_02": ["aq_01", "aq_02"],
+                "gw_03": ["s_01", "s_02"],
+            }
+            
+            Returns: a dict mapping gateway IDs to their response
 
 
+            {
+                "gateway_01": {
+                    "status": "success",
+                    "code": 200,
+                    "records": {
+                        "temp_01": {"status": "OK", "value": 25.3, ...},
+                        "temp_02": {"status": "ERROR", "message": "Sensor malfunction", ...},
+                    }
+                },
+                ...
+            }
+        }
+        """
+        f = self.commands_map.get(command)
+        response = f(command, target) if f else None
+        if isinstance(response, str):
+            return {"status": "error", "message": response}
+        assert isinstance(response, dict), "Expected response to be a dict"
+        return response
+    
+    def _build_sensor_command_response(self, edge_results: dict[str, DeviceResult]) -> dict:
+        """
+        Convert the raw edge results into the structured response format expected by the frontend.
+        This includes determining the overall status, extracting connection and sensor statuses, and summarizing ingestion results.
+
+            Args:
+
+        - edge_results: dict mapping gateway IDs to their DeviceResult objects, which contain the raw responses from the edge devices.
+        
+
+            Returns: a dict containing the overall status, connection status, sensor status, and ingestion summary.
+
+        """
+        ingestion_summary = {}
+        db_service = current_app.config.get("DB_SERVICE")
+        if db_service and db_service.is_connected():
+            ingestion_summary = ingest_edge_results(db_service, edge_results)
+        else:
+            ingestion_summary = {"warning": "DB_SERVICE not available — data not persisted"}
+
+        # Determine overall status
+        any_success = any(r.gateway_info.status == "success" for r in edge_results.values())
+        overall_status = "success" if any_success else "error"
+        http_code = 200 if any_success else 502
+
+        return {
+            "status": overall_status,
+            "connection_status": {gw: r.gateway_info.status for gw, r in edge_results.items()},
+            "sensor_status": {f"{gw}:{dev}": d.status for gw, r in edge_results.items() for dev, d in r.records.items()},
+            "devices": edge_results,
+            "ingestion_summary": ingestion_summary,
+        }, http_code
+    
+    def _send_command_to_sensors(self, command: str, targets: dict[str, list[str]]) -> dict[str, DeviceResult] | str:
+        """
+        Input:
+        - command: str 
+
+            "cmd_01"
+
+        - target: dict mapping gateway IDs to lists of sensor IDs.
+
+            {
+                "gateway_id (e.g. gw_01)": ["temp_01", "temp_02"],  
+                "gw_02": ["aq_01", "aq_02"],
+                "gw_03": ["s_01", "s_02"],
+            }
+
+        Output:
+        - unknown now
+        """
+        record_type = 'sensor_reading_event'
+
+        edge_results = self.client.send_command_to_sensors(
+            command = command,
+            target = targets,
+        )
+        # Validate response structure with Pydantic
+        try:
+            EdgeResults(edge=edge_results)
+            return edge_results
+        except ValidationError as ve:
+            print(f"Pydantic validation error: {ve}")
+            return f"Pydantic validation error: {ve}"
+
+        
+        ingestion_summary = {}
+        db_service = current_app.config.get("DB_SERVICE")
+        if db_service and db_service.is_connected():
+            ingestion_summary = ingest_edge_results(db_service, edge_results)
+        else:
+            ingestion_summary = {"warning": "DB_SERVICE not available — data not persisted"}
+
+        # Determine overall status
+        any_success = any(r["status"] == "success" for r in edge_results.values())
+        overall_status = "success" if any_success else "error"
+        http_code = 200 if any_success else 502
+        return jsonify({
+            "status": overall_status,
+            "connection_status": {gw: r["status"] for gw, r in edge_results.items()},
+            "sensor_status": {f"{gw}:{dev}": d["status"] for gw, r in edge_results.items() for dev, d in r["records"].items()},
+            "devices": edge_results,
+            "ingestion_summary": ingestion_summary,
+        }), http_code
+
+    def _send_command_to_actuators(self, command: str, actuators: dict[str, list[str]]):
+        """
+        Similar to _send_command_to_sensors but for actuators. The structure of the input and output is the same, but the records will have different fields based on the type of actuator and the command sent.
+        """
+        pass
+
+dispatcher = CommandDispatcher()
+# ────────────────── Flask Routes ───────────────────────────────────────────
 bp_operator = Blueprint("operator_api", __name__, url_prefix="/operator")
 
 # ── Load Templates Roots ──────────────────────────────────────────
@@ -91,10 +213,6 @@ def health():
 @bp_operator.route("/anomalies", methods=["GET"])
 def anomalies():
     return render_template("anomalies.html")
-
-
-
-
 
 @bp_operator.route("/history/<parameter>", methods=["GET"])
 def get_history(parameter: str):
@@ -152,99 +270,17 @@ def get_history(parameter: str):
     return jsonify(mock_data)
 
 
-
 @bp_operator.route("/commands/send", methods=["POST"])
-def send_command():
-    """
-    Input:
-        JSON body with fields:
-        {
-            - target: {
-                "twin_id": "etna_01",
-                "gateway_id": ["gw_01", "gw_02" ],  # optional, if not provided, assume all gateways for the twin
-                "sensor_id": ["temp_01", "temp_02"]  # optional, if not provided, assume all sensors for the parameter
-            },
-            - command_id: "cmd_01",
-            - issued_by: "operator_01",  
-        }
-    """
+def send():
     data = request.get_json()
-    if not data:
-        return jsonify({"status": "error", "message": "Invalid JSON in request body"}), 400
+    command_id = str(data.get("command_id")).lower()
+    operator_id = str(data.get("issued_by")).lower()
+    target = dict(data.get("target"))
 
-    target = data.get("target", {})
-    if not target or "command_id" not in data or "issued_by" not in data:
-        return jsonify({"status": "error", "message": "Missing required fields: target, command_id, issued_by"}), 400
+    # Dispatch the command to the appropriate edge devices
+    edge_results = dispatcher.send_command(command=command_id, target=target)
 
-    twin_id = target.get("twin_id") or current_app.config["DEFAULT_TWIN_ID"]
-    command_id = data.get("command_id")
-    gateway_ids = target.get("gateway_id")  # optional list of gateway IDs to target, if not provided, assume all gateways for the twin
-    sensor_ids = target.get("sensor_id")    # optional list of sensor IDs to target, if not provided, assume all sensors for the parameter
-    operator_id = data.get("issued_by")
-
-    # Fan out the command to all (or selected) edge devices in parallel.
-    # Blocks only THIS request thread; other Flask threads keep serving normally.
-    edge_results = client_http.send_command_to_all_devices(
-        command_id,
-        sensors=sensor_ids,
-        device_ids=gateway_ids,
-        twin_id=twin_id,
-    )
-
-    # Validate response structure with Pydantic
-    try:
-        EdgeResults(edge=edge_results)
-    except ValidationError as ve:
-        return jsonify({"status": "error", "message": "Invalid response structure from devices", "details": ve.errors()}), 502
-    # dt = current_app.extensions["dt_service"]
-    # dt.send_command(twin_id, command_id, sensor_id=sensor_id)
-
-    # Check for connection errors with the gateways (network issues, device offline, etc.)
-    connection_status = {device_id: res["status"] for device_id, res in edge_results.items()} 
-    if any(status == "error" for status in connection_status.values()):
-        print(f"Connection errors with devices: {connection_status}")
-        # Depending on requirements, you might want to return an error response here instead of proceeding.
-
-    # Check sensor-level errors in the device responses (e.g. invalid sensor_id, command processing error, etc.)
-    sensors_status = {}
-    for device_id, res in edge_results.items():
-        if res["status"] == "success" and isinstance(res["body"], dict) and "records" in res["body"]:
-            for record in res["body"]["records"]:
-                sensor_id = record.get("id", "unknown_sensor")
-                sensors_status[f"{device_id}:{sensor_id}"] = record.get("status", "unknown_status")
-
-    print(f"Received command: {command_id} for twin: {twin_id}, gateways: {gateway_ids}, sensors: {sensor_ids}. from operator: {operator_id}")
-    
-    # ── Persist sensor readings into Digital Replicas ──────────────
-    # This is the bridge between the HTTP pull and the DT persistence layer.
-    # For every OK sensor record in the gateway responses, the ingestion service:
-    #   1. Finds (or auto-creates) the matching sensor DR by physical sensor_id
-    #   2. Appends the measurement to sensor DR + gateway DR
-    #   3. Updates current_value on the sensor DR
-    ingestion_summary = {}
-    db_service = current_app.config.get("DB_SERVICE")
-    if db_service and db_service.is_connected():
-        ingestion_summary = ingest_edge_results(db_service, edge_results)
-    else:
-        ingestion_summary = {"warning": "DB_SERVICE not available — data not persisted"}
-
-    # Determine overall status
-    any_success = any(r["status"] == "success" for r in edge_results.values())
-    overall_status = "success" if any_success else "error"
-    http_code = 200 if any_success else 502
-
-    return jsonify({
-        "status": overall_status,
-        "message": f"Command '{command_id}' sent to twin '{twin_id}', gateways '{gateway_ids}', sensors '{sensor_ids}', by operator '{operator_id}'.",
-        "devices": edge_results,
-        "connection_status": connection_status,
-        "sensor_status": sensors_status,
-        "ingestion": ingestion_summary,
-    }), http_code
-
-        
-
-
+    return jsonify(edge_results)
 
 def register_operator_routes(app):
     app.register_blueprint(bp_operator)

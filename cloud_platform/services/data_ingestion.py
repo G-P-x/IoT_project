@@ -36,6 +36,7 @@ import logging
 from datetime import datetime
 from typing import Dict, List, Optional
 from cloud_platform.virtualization.digital_replica.dr_factory import DRFactory
+from cloud_platform.virtualization.digital_replica.history_factory import HistoryFactory
 
 logger = logging.getLogger(__name__)
 
@@ -164,49 +165,6 @@ def _resolve_gateway_dr_id(db_service, device_id: str) -> Optional[str]:
         return results[0]["_id"]
     return None
 
-def ingest_telemetry_data(db_service, telemetry_data: List[Dict]) -> None:
-    """
-    Process telemetry data from a gateway and persist it as measurements in the corresponding sensor DRs.
-
-    Args:
-        db_service:     The DatabaseService instance.
-        telemetry_data: List of dicts containing the gateway's telemetry data, expected format:
-                    [
-                        {
-                            "time_stamp": "2026-05-05T14:30:00.000Z",
-                            "record": {
-                            "id": "mpu6050_01",
-                            "type": "accelerometer",
-                            "status": "ERROR",
-                            "severity": "critical",
-                            "value": null,
-                            "message": "MPU-6050 connection lost",
-                            "timestamp": "2026-05-05T14:29:58Z"
-                            }
-                        }
-                    ]
-
-    """
-    # Implementation for ingesting telemetry data
-    # 1. Validate the telemetry data format.
-    assert isinstance(telemetry_data, list), "Telemetry data must be a list of records"
-    for data in telemetry_data:
-        assert isinstance(data, dict), "Each telemetry record must be a dict"
-        assert "time_stamp" in data, "Each telemetry record must have a 'time_stamp' field"
-        assert "record" in data, "Each telemetry record must have a 'record' field"
-        assert "id" in data['record'], "Each telemetry record must have an 'id' field"
-        assert "type" in data['record'], "Each telemetry record must have a 'type' field"
-        assert "status" in data['record'], "Each telemetry record must have a 'status' field"
-        assert "severity" in data['record'], "Each telemetry record must have a 'severity' field"
-        assert "value" in data['record'], "Each telemetry record must have a 'value' field"
-        assert "timestamp" in data['record'], "Each telemetry record must have a 'timestamp' field"
-
-    assert all(isinstance(record, dict) and "id" in record for record in telemetry_data), "Each telemetry record must be a dict with an 'id' field"
-    # 2. Aggregate the data by id.
-    # 3. For each unique id, find the latest record and persist it as a measurement in the corresponding sensor DR.
-    # 4. Persist all the records related to the same id in the history collection of the sensor DR, ensuring uniqueness based on the timestamp. 
-    pass
-
 def ingest_edge_results(db_service, edge_results: Dict) -> Dict:
     """
     Process the full edge_results dict returned by send_command_to_all_devices()
@@ -226,7 +184,7 @@ def ingest_edge_results(db_service, edge_results: Dict) -> Dict:
                                     "id": "...", "value": ..., "timestamp": "..." },
                                   ...
                               ]
-                          }
+                          } 
                       }
 
     Returns:
@@ -268,7 +226,7 @@ def ingest_edge_results(db_service, edge_results: Dict) -> Dict:
                     "reason": record.get("message", "non-OK status"),
                 })
                 continue
-
+            gateway_id = record.get("gateway_id", "unknown_gateway")
             physical_sensor_id = record.get("id")
             value = record.get("value")
             timestamp = record.get("timestamp", datetime.utcnow().isoformat())

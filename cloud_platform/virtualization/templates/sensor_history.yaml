@@ -12,7 +12,7 @@
 schemas:
   common_fields:
     # "_id" managed by mongo db
-    record_type: str                       # DR type identifier ("sensor_reading_event")
+    record_type: str                # DR type identifier ("sensor_reading_event") based on the command/event taxonomy
     device_id: str                 # DR _id of the sensor this reading belongs to
     gateway_id: str               # DR _id of the gateway this sensor is attached to
     timestamp: datetime           # Time at which the reading was observed

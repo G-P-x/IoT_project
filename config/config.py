@@ -55,3 +55,9 @@ class Config:
     # Directories
     TEMPLATES_DIR = os.getenv("TEMPLATES_DIR", "templates")
     STATIC_DIR = os.getenv("STATIC_DIR", "static")
+
+    # commands
+    COMMANDS = {
+        "cmd_01": "sensor_reading_event",
+        "cmd_02": "display_message",
+    }

@@ -97,7 +97,7 @@ def _send_http_command(url, command, field_devices):
         return {"status": "error", "code": CUSTOM_ERROR_CODE, "error": str(e), "req_timestamp": datetime.now(timezone.utc).isoformat()}
 
 
-def send_command_to_devices(command, devices: dict):
+def send_command_to_sensors(command, target: dict):
     """
     Fan-out a command to multiple edge devices in parallel.
 
@@ -107,7 +107,7 @@ def send_command_to_devices(command, devices: dict):
 
     Args:
         command:    The command string (e.g. "cmd_01").
-        devices:    A dict mapping gateway IDs to their field devices.
+        target:    A dict mapping gateway IDs to their field devices.
         
     Returns:
         A dict mapping gateway_id → result dict, where each result contains:
@@ -117,8 +117,8 @@ def send_command_to_devices(command, devices: dict):
             - "error":   Error description (if error)
     """
     
-    gateway_ids = list(devices.keys()) if isinstance(devices, dict) else list(cfg.EDGE_DEVICES.keys())
-    field_devices = list(devices.values()) if isinstance(devices, dict) else [[] for _ in gateway_ids]
+    gateway_ids = list(target.keys()) if isinstance(target, dict) else list(cfg.EDGE_DEVICES.keys())
+    field_devices = list(target.values()) if isinstance(target, dict) else [[] for _ in gateway_ids]
     urls = [_build_url(cfg.EDGE_DEVICES[gateway_id]) for gateway_id in gateway_ids] if gateway_ids is not None else list(cfg.EDGE_DEVICES.values())
     assert len(urls) > 0, "No devices to send command to."
 
@@ -435,9 +435,9 @@ if __name__ == "__main__":
     MODULE_PATH = "cloud_platform.application.client_http"
 
 
-    # ── TEST 1: send_command_to_devices ─────────────────────────────────
+    # ── TEST 1: send_command_to_sensors ─────────────────────────────────
     print("\n" + "=" * 60)
-    print("TEST 1: send_command_to_devices")
+    print("TEST 1: send_command_to_sensors")
     print("Targeting: gateway_01 (success), gateway_03 (failure)")
     print("=" * 60)
     
@@ -449,7 +449,7 @@ if __name__ == "__main__":
 
     # Patching requests.post using the module path where it's imported
     with patch(f"{MODULE_PATH}.requests.post", side_effect=mock_requests_post):
-        command_results = send_command_to_devices("cmd_01", target_devices)
+        command_results = send_command_to_sensors("cmd_01", target_devices)
         
         for gw_id, res in command_results.items():
             print(f"\n  [{gw_id}]")
