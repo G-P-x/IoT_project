@@ -248,7 +248,7 @@ def send():
     # 2. save the results to the database for historical analysis and visualization in the frontend
 
     # Fire-and-forget DB save without blocking the response to the frontend
-    _executor.submit(ingest_edge_results, current_app.config.get("DB_SERVICE"), edge_results, submitter=operator_id)
+    _executor.submit(ingest_edge_results, current_app.config.get("DB_SERVICE"), edge_results, submitter=operator_id, command=command_id)
     return jsonify(edge_results), 200
 
 def register_operator_routes(app):
