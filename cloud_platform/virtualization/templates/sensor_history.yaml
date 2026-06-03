@@ -23,6 +23,7 @@ schemas:
       value: float                  # Sensor reading value
       source: str                   # Origin of the reading (monitor, operator, recovery)
       status: str                   # Status of the sensor at the time of reading (e.g., "active", "inactive")
+      operator_id: str | None       # If source is "operator", the ID of the operator who triggered the reading, else None
 
   validations:
     mandatory_fields:

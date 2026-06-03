@@ -153,7 +153,12 @@ class DRSchemaRegistry:
         return result
 
     def get_collection_name(self, schema_type: str) -> str:
-        return f"{schema_type}_collection"
+        schemes = ["gateway", "sensor", "actuator", "device"]
+        if schema_type in schemes:
+            return "device_collection"
+        else:
+            return "history_collection"
+
 
     def get_validation_schema(self, schema_type: str) -> Dict:
         if schema_type not in self.schemas:

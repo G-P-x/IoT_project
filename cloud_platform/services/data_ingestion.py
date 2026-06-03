@@ -84,7 +84,7 @@ def _infer_sensor_type(physical_sensor_id: str) -> str:
     suffix = parts[1].rstrip("0123456789")  # "t1" → "t", "aq1" → "aq"
     return SENSOR_TYPE_MAP.get(suffix, "unknown")
 
-def _find_gateway_dr(db_service: DatabaseService, device_id: str) -> Optional[Dict]:
+def _find_dr(db_service: DatabaseService, device_id: str) -> Optional[Dict]:
     """
     Look up the gateway DR by the physical device_id.
 
@@ -93,64 +93,23 @@ def _find_gateway_dr(db_service: DatabaseService, device_id: str) -> Optional[Di
     """
     # Try to find an existing gateway DR by device_id
     existing = db_service.query_drs("device", {"profile.device_id": device_id})
-    if existing:
+    if existing: # if the list is not empty, return the first match (there should ideally be only one)
         return existing[0]
+    return None
 
+
+def _create_sensor_dr_entry(db_service: DatabaseService, gateway_id: str, sensor_id: str, record: Dict) -> dict:
     # ── Auto-create ──────────────────────────────────────────────────
-    initial_data = {
-        "profile": {
-            "name": f"Gateway {device_id}",
-            "device_id": device_id,
-            "description": f"Auto-created for device '{device_id}'",
-        },
-        "data": {
-            "sensors": [],  # will be populated as sensors are linked
-        },
-    }
-
-    dr_factory = DRFactory("cloud_platform/virtualization/templates/gateway.yaml")
-    gateway_dr = dr_factory.create_dr("gateway", initial_data)
-    db_service.save_dr("gateway", gateway_dr)
-
-    logger.info("Auto-created gateway DR '%s' for device '%s'", gateway_dr["_id"], device_id)
-    return gateway_dr
-
-def _find_or_create_sensor_dr(
-    db_service,
-    physical_sensor_id: str,
-    gateway_device_id: str,
-    gateway_dr_id: Optional[str] = None,
-) -> Dict:
-    """
-    Look up a sensor DR by its physical sensor_id.  If it doesn't exist,
-    auto-create one and link it to the gateway.
-
-    Args:
-        db_service:          The DatabaseService instance.
-        physical_sensor_id:  e.g. "84F3EB12A0BC-t1".
-        gateway_device_id:   The gateway's device_id (e.g. "device_01").
-        gateway_dr_id:       The gateway DR's _id (if known) to set on the sensor profile.
-
-    Returns:
-        The sensor DR document dict (existing or newly created).
-    """
-    # Try to find an existing sensor DR by physical ID
-    existing = db_service.query_drs("sensor", {"profile.sensor_id": physical_sensor_id})
-    if existing:
-        return existing[0]
-
-    # ── Auto-create ──────────────────────────────────────────────────
-    sensor_type = _infer_sensor_type(physical_sensor_id)
+    sensor_type = _infer_sensor_type(sensor_id)
     unit = UNIT_MAP.get(sensor_type, "")
 
     initial_data = {
         "profile": {
-            "name": f"Sensor {physical_sensor_id}",
-            "sensor_id": physical_sensor_id,
+            "sensor_id": sensor_id,
             "sensor_type": sensor_type,
             "unit": unit,
-            "description": f"Auto-created from gateway '{gateway_device_id}' response",
-            "gateway_id": gateway_dr_id or "",
+            "description": f"Auto-created from gateway '{gateway_id}' response",
+            "gateway_id": gateway_id or "",
         },
     }
 
@@ -158,34 +117,29 @@ def _find_or_create_sensor_dr(
     sensor_dr = dr_factory.create_dr("sensor", initial_data)
     db_service.save_dr("sensor", sensor_dr)
 
-    # If we know the gateway DR, add this sensor to its sensors list
-    if gateway_dr_id:
-        _link_sensor_to_gateway(db_service, gateway_dr_id, sensor_dr["_id"])
-
     logger.info(
         "Auto-created sensor DR '%s' (type=%s) for gateway '%s'",
-        sensor_dr["_id"], sensor_type, gateway_device_id,
+        sensor_dr["_id"], sensor_type, gateway_id,
     )
     return sensor_dr
 
-
-def _link_sensor_to_gateway(db_service, gateway_dr_id: str, sensor_dr_id: str) -> None:
+def _link_sensor_to_gateway(db_service, gateway_id: str, sensor_dr_id: str) -> None:
     """
     Add a sensor DR _id to the gateway DR's data.sensors list (if not already present).
     """
     try:
-        gw = db_service.get_dr("gateway", gateway_dr_id)
+        gw = db_service.get_dr("gateway", gateway_id)
         if not gw:
             return
         sensors_list = gw.get("data", {}).get("sensors", [])
         if sensor_dr_id not in sensors_list:
             sensors_list.append(sensor_dr_id)
-            db_service.update_dr("gateway", gateway_dr_id, {
+            db_service.update_dr("gateway", gateway_id, {
                 "data": {"sensors": sensors_list},
                 "metadata": {"updated_at": datetime.utcnow()},
             })
     except Exception as e:
-        logger.warning("Failed to link sensor %s to gateway %s: %s", sensor_dr_id, gateway_dr_id, e)
+        logger.warning("Failed to link sensor %s to gateway %s: %s", sensor_dr_id, gateway_id, e)
 
 
 def _resolve_gateway_dr_id(db_service, device_id: str) -> Optional[str]:
@@ -200,6 +154,19 @@ def _resolve_gateway_dr_id(db_service, device_id: str) -> Optional[str]:
     return None
 
 def _create_gateway_record(gateway_id: str, gateway_info: Dict, sub: str | None) -> dict:
+    ''' 
+    
+    Create a history record for the gateway status update. 
+
+        Args:
+            - gateway_id: the physical device_id of the gateway
+            - gateway_info: the gateway_info dict from the DeviceResult, containing status, code, error, req_timestamp
+            - sub: the operator user ID if this ingestion is triggered by an operator command, else None if triggered by telemetry
+
+        Returns:    
+            - A dict representing the history record to be saved, following the gateway_history.yaml template.
+
+    '''
     history_factory = HistoryFactory("cloud_platform/virtualization/templates/gateway_history.yaml")
 
     history_entry = history_factory.create_record({
@@ -244,6 +211,20 @@ def _create_actuator_record(gateway_id, actuator_id: str, record: Dict, sub: str
     pass
 
 def _create_gateway_dr_entry(gateway_id: str, gateway_info: Dict, sensors : List[str] = [], actuators: List[str] = []) -> dict:
+    '''
+    Create a gateway DR entry dict with the given info. It does not enforce an _id.
+
+    Args:
+        - gateway_id: the physical device_id of the gateway
+        - gateway_info: the gateway_info dict from the DeviceResult, containing status, code, error, req_timestamp
+        - sensors: list of sensor IDs to link to this gateway DR
+        - actuators: list of actuator IDs to link to this gateway DR
+
+    Returns:
+        -  A dict representing the gateway DR to be saved, following the gateway.yaml template.
+
+
+    '''
     dr_factory = DRFactory("cloud_platform/virtualization/templates/gateway.yaml")
     initial_data = {
         "profile": {
@@ -251,6 +232,7 @@ def _create_gateway_dr_entry(gateway_id: str, gateway_info: Dict, sensors : List
         },
         "data": {
             "sensors": sensors,  # will be populated as sensors are linked
+            "actuators": actuators,  # will be populated as actuators are linked
         },
         "metadata": {
             "last_update": gateway_info.get("req_timestamp", datetime.now(timezone.utc).isoformat()),
@@ -316,27 +298,16 @@ def _collect_latest_sensor_readings(records: Dict[str, Dict]) -> tuple[list[str]
 
     return sensors, latest
 
-def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, DeviceResult], submitter: str | None) -> Dict:
+def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, DeviceResult], submitter: str | None, command: str | None) -> Dict:
     """
     Process the full edge_results dict returned by send_command_to_all_devices()
     and persist every successful sensor reading into the corresponding DRs.
 
     Args:
         db_service:   The DatabaseService instance (from current_app.config["DB_SERVICE"]).
-        edge_results: Dict mapping device_id → result dict, as returned by
-                      client_http.send_command_to_all_devices().
-                      Expected record format per device:
-                      {
-                          "status": "success",
-                          "body": {
-                              "time_stamp": "...",
-                              "records": [
-                                  { "status": "OK", "type": "sensor",
-                                    "id": "...", "value": ..., "timestamp": "..." },
-                                  ...
-                              ]
-                          } 
-                      }
+        edge_results: Dict of gateway_id → DeviceResult as returned by the HTTP client after polling the gateways.
+        submitter:    The operator user ID if this ingestion is triggered by an operator command, else None if triggered by telemetry.
+        command:        The command string if this ingestion is triggered by an operator command, else None.
 
     Returns:
         A summary dict:
@@ -357,19 +328,30 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
         return {}
 
     for gateway_id, gtw_data in edge_results.items(): # gateway_id, data: DeviceResult
-        # Skip devices that failed to respond
         assert isinstance(gtw_data, dict), f"Expected dict for device result, got {type(gtw_data)}"
 
         # ----- First case: gateway-level failure (e.g. no response) -----
         if gtw_data.get("gateway_info", {}).get("status") != "success":
-            history_entry = _create_gateway_record(gateway_id, gtw_data.get("gateway_info", {}), sub = submitter)
+            
+            # phase 1: create a history record for the gateway with status "inactive" and source "operator" or "telemetry" based on the submitter
+            history_entry = _create_gateway_record(gateway_id, gtw_data.get("gateway_info", {}), sub = submitter) # create a history record for the gateway
             db_service.save_history_event(history_entry)
-            dr_entry = _create_gateway_dr_entry(gateway_id, gtw_data.get("gateway_info", {}))
-            if dr_entry:
-                db_service.update_dr("gateway", dr_entry["_id"], {
-                    "data": {"status": "inactive"},
-                    "metadata": {"updated_at": datetime.now(timezone.utc).isoformat()},
-                })
+
+            # phase 2: find or create the gateway DR and set its status to "inactive" (if it already exists, just update the status and last_update timestamp, if it doesn't exist, create it with the status "inactive" and no sensors/actuators)
+            dr_entry = _find_dr(db_service, gateway_id) # find an existing gateway DR by device_id (by default it searches in the "device" collection)
+
+            if not dr_entry: # if no gateway DR exists, create one with status "inactive" and no sensors/actuators
+                dr_entry = _create_gateway_dr_entry(gateway_id, gtw_data.get("gateway_info", {})) # create the gateway DR dictionary using gateway.yaml template
+                dr_entry = db_service.add_dr(dr_entry)
+                if not dr_entry:
+                    logger.error("Failed to save new gateway DR for device '%s'", gateway_id)
+                    continue
+
+            db_service.update_dr("device", dr_entry["_id"], {
+                                "metadata": {"last_update": gtw_data.get("gateway_info", {}).get("req_timestamp", datetime.now(timezone.utc).isoformat()),
+                                            "status": "inactive"},
+                            })
+            
             continue
         
         # ----- Second case: gateway-level success -----
@@ -383,16 +365,70 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
 
             # create a history entry and DR entry for the sensor record
             if device_data.get("type") == "sensor":
+                # Phase 1: create a history record for the sensor with status "active" or "inactive" based on the record status and source "operator" or "telemetry" based on the submitter
                 history_entry = _create_sensor_record(gateway_id, device_id, device_data, sub = submitter)
                 db_service.save_history_event(history_entry)
                 sensors.append(device_id)
-                # also create/update the sensor DR and link it to the gateway DR
+
+                # Phase 2: find or create the sensor DR and link it to the gateway DR (if not already linked)
+                dr_entry = _find_dr(db_service, device_id) # find an existing sensor DR by physical sensor_id
+                if not dr_entry: # if no sensor DR exists, create one
+                    dr_entry = _create_sensor_dr_entry(gateway_id, device_id, device_data) # create the sensor DR dictionary using sensor.yaml template
+                    dr_entry = db_service.add_dr(dr_entry) # and insert in the collection
                 
+                db_service.update_dr("sensor", dr_entry["_id"], {
+                    "data": {
+                        "value": device_data.get("value"),
+                        "timestamp": device_data.get("timestamp"),
+                    },
+                    "metadata": {
+                        "updated_at": datetime.utcnow(),
+                    },
+                })
+
             elif device_data.get("type") == "actuator":
-                # to be completed when I will have more details about the actuators
+                history_entry = _create_actuator_record(gateway_id, device_id, device_data, sub=submitter, command=command)
+                db_service.save_history_event(history_entry)
                 actuators.append(device_id)
 
-        dr_entry = _create_gateway_dr_entry(gateway_id, gtw_data.get("gateway_info", {}), sensors = sensors, actuators = actuators)
-        # update the gateway DR with the new sensors/actuators and status
+                # Update the digital replica of the actuator
+                dr_entry = _find_dr(db_service, device_id)
+                if dr_entry:
+                    db_service.update_dr("actuator", dr_entry["_id"], {
+                        "data": {
+                            "status": device_data.get("status"),
+                            "command": command,
+                            "timestamp": device_data.get("timestamp"),
+                        },
+                        "metadata": {
+                            "updated_at": datetime.utcnow(),
+                        },
+                    })
 
-## ARRIVATO QUI IL GIORNO 25-05
+        # Update the gateway DR with the new sensors/actuators and status, keeping existing ones
+        gateway_dr = _find_dr(db_service, gateway_id)
+        if gateway_dr:
+            existing_sensors = gateway_dr.get("data", {}).get("sensors", [])
+            existing_actuators = gateway_dr.get("data", {}).get("actuators", [])
+            
+            for s in sensors:
+                if s not in existing_sensors:
+                    existing_sensors.append(s)
+            
+            for a in actuators:
+                if a not in existing_actuators:
+                    existing_actuators.append(a)
+                    
+            db_service.update_dr("device", gateway_dr["_id"], {
+                "data": {
+                    "sensors": existing_sensors,
+                    "actuators": existing_actuators,
+                },
+                "metadata": {
+                    "last_update": gtw_data.get("gateway_info", {}).get("req_timestamp", datetime.now(timezone.utc).isoformat()),
+                    "status": "active" if gtw_data.get("gateway_info", {}).get("status") == "success" else "inactive",
+                }
+            })
+        else:
+            dr_entry = _create_gateway_dr_entry(gateway_id, gtw_data.get("gateway_info", {}), sensors=sensors, actuators=actuators)
+            db_service.add_dr(dr_entry)
