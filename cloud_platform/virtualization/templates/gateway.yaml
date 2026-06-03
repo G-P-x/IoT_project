@@ -65,8 +65,6 @@ schemas:
     initialization:
       root:
         dr_type: "gateway"
-      metadata:
-        status: "active"
       entity.data:
         sensors: []
         actuators: []

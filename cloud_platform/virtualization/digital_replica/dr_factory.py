@@ -21,7 +21,7 @@ Architecture reasoning (from the lecture):
   type requires only a new YAML file — no Python code changes.
 """
 
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Dict, Any, Optional, Type, List, get_args, get_origin, Union
 from pydantic import BaseModel, create_model, Field, field_validator
 import yaml
@@ -350,8 +350,8 @@ class DRFactory:
             "_id": str(uuid.uuid4()),
             "dr_type": dr_type,
             "metadata": {
-                "created_at": datetime.utcnow(),
-                "last_update": datetime.utcnow(),
+                "created_at": datetime.now(timezone.utc).isoformat(),
+                "last_update": datetime.now(timezone.utc).isoformat(),
             },
             "data": {},
         }

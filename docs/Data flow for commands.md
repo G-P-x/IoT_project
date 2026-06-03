@@ -11,10 +11,10 @@ Send a command to multiple edge devices (to the gateway it can reach the field d
 2. Begin the requests to the single gateway (loop)
 	1. calls `_send_http_command()` for each triplets `base_url, command, field_device`
 	   It returns a dictionary equal to the one I got from `_pool_gateway()`
-		```
+		``` python
 		result = {
 			"status": "success",
-			"code": %% either response or custom error code %%,
+			"code": either response or custom error code,
 			"req_timestamp": datetime.now(timezone.utc).isoformat()
 			body: 
 			[
@@ -45,20 +45,20 @@ Send a command to multiple edge devices (to the gateway it can reach the field d
 			],
 		}
 		```
-3. This result is passed to `_normalize_result(result)` and aggregated in `send_command_to_devices()` to get the final result
-	```
+3. This result is passed to `_normalize_result(result)` and aggregated in `send_command_to_sensors()` to get the final result
+	``` python
 	results = {
-		gateway_id (e.g. "gateway_01") : 
+		"gateway_01": # gateway ID
 		{
-			gateway_info: {
+			"gateway_info": {
 				"status": "success",
-				"code": %% either response or custom error code %%,
-				"error": None
+				"code": 200, # either response code or custom error code,
+				"error": None,
 				"req_timestamp": result.get("req_timestamp"),
 			}	
-			records: 
+			"records": 
 			{
-				device_id (e.g. "mpu6050_01"): 
+				"mpu6050_01": # field device ID 
 				{
 					"type": "accelerometer",
 					"status": "ERROR",
@@ -67,7 +67,7 @@ Send a command to multiple edge devices (to the gateway it can reach the field d
 					"message": "MPU-6050 connection lost",
 					"timestamp": "2026-02-16T15:40:12Z"
 				}
-				"sensore_2":
+				"sensore_2": # field device ID
 				{
 					"type": "sensor"
 						"status": "OK"
@@ -79,11 +79,11 @@ Send a command to multiple edge devices (to the gateway it can reach the field d
 			},
 		}
 		
-		"gateway_02":
+		"gateway_02": # gateway ID
 		{
 			gateway_info: {
 				"status": "error",
-				"code": %% either response or custom error code %%,
+				"code": 404,
 				"error": "(e.g. error 404, resource not found)"
 				"req_timestamp": result.get("req_timestamp"),
 			}
@@ -92,3 +92,14 @@ Send a command to multiple edge devices (to the gateway it can reach the field d
 		}
 	}
 	```
+
+In `ingest_edge_results()` I have a lot of for loops.
+The goals are, for each gateway_id:
+1. read `records` and:
+	1. retrieve the list of sensors id read (unique entries), this will be used to update the list of sensors in the gateway DR
+	2. add the information about all received devices in records to the history collection
+	3. for each unique sensor id, I need to know the last reading (based on timestamp) so that I can update the corresponding DR with the last reading only
+2. read the `gateway_info` and add the information to the history collection
+3. read the `gateway_info` and update the gateway DR
+
+I wonder if there's a way to perform this logic without using a for loop for each task.

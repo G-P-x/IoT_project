@@ -22,6 +22,7 @@ schemas:
     data:
       value: float                  # Sensor reading value
       source: str                   # Origin of the reading (monitor, operator, recovery)
+      status: str                   # Status of the sensor at the time of reading (e.g., "active", "inactive")
 
   validations:
     mandatory_fields:
@@ -33,7 +34,9 @@ schemas:
         - timestamp
       data:
         - value
+        - status
         - source
+        - operator_id
 
     type_constraints:
       record_type:
@@ -47,9 +50,14 @@ schemas:
         type: datetime
       value:
         type: float
+      status:
+        type: str
+        enum: ["active", "inactive"]
       source:
         type: str
         enum: ["telemetry", "operator"]
+      operator_id:
+        type: str | None
 
     initialization:
       root:

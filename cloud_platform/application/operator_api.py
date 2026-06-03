@@ -1,9 +1,11 @@
 from flask import Blueprint, current_app, jsonify, request
 from flask import render_template
+from cloud_platform.types.edge import EdgeResults, DeviceResult
 from cloud_platform.application import client_http
 from cloud_platform.services.data_ingestion import ingest_edge_results
 from pydantic import BaseModel, ValidationError
 from typing import Literal
+from concurrent.futures import ThreadPoolExecutor
 
 # ── Imports for Mock data for testing (delete in production) ──────────────────────────────────
 from datetime import datetime, timedelta
@@ -18,27 +20,29 @@ import random
 # 5. View current state of the DT (latest telemetry, health status, etc.)
 # 6. View sensor status and diagnostics
 
+# executor for returning results to the frontend without waiting for  database ingestion to complete
+_executor = ThreadPoolExecutor(max_workers=2)
 # ── pydantic for enhanced data validation ──────────────────────────────────────────
-class GatewayInfo(BaseModel):
-    status: Literal["success", "error"]
-    code: int
-    error: str | None = None
-    req_timestamp: str
+# class GatewayInfo(BaseModel):
+#     status: Literal["success", "error"]
+#     code: int
+#     error: str | None = None
+#     req_timestamp: str
 
-class FieldDeviceResult(BaseModel):
-    type: str                    # "temperature sensor" or "air quality sensor", etc.
-    status: str                    # "ERROR" or "OK"
-    severity: str                  # "critical", "warning", "info"
-    value: float | None          # present if status is OK
-    message: str                # "reading acquired" or "invalid sensor_id", etc.
-    timestamp: str              # ISO datetime string of when the reading was taken
+# class FieldDeviceResult(BaseModel):
+#     type: str                    # "temperature sensor" or "air quality sensor", etc.
+#     status: str                    # "ERROR" or "OK"
+#     severity: str                  # "critical", "warning", "info"
+#     value: float | None          # present if status is OK
+#     message: str                # "reading acquired" or "invalid sensor_id", etc.
+#     timestamp: str              # ISO datetime string of when the reading was taken
 
-class DeviceResult(BaseModel):
-    gateway_info: GatewayInfo
-    records: dict[str, FieldDeviceResult]
+# class DeviceResult(BaseModel):
+#     gateway_info: GatewayInfo
+#     records: dict[str, FieldDeviceResult]
 
-class EdgeResults(BaseModel):
-    edge: dict[str, DeviceResult]  # gateway_id → DeviceResult
+# class EdgeResults(BaseModel):
+#     edge: dict[str, DeviceResult]  # gateway_id → DeviceResult
 
 # ────────────────── Command Dispatcher ──────────────────
 class CommandDispatcher:
@@ -87,6 +91,7 @@ class CommandDispatcher:
             }
         }
         """
+        # Discriminate command type and call the appropriate handler
         f = self.commands_map.get(command)
         response = f(command, target) if f else None
         if isinstance(response, str):
@@ -94,41 +99,9 @@ class CommandDispatcher:
         assert isinstance(response, dict), "Expected response to be a dict"
         return response
     
-    def _build_sensor_command_response(self, edge_results: dict[str, DeviceResult]) -> dict:
-        """
-        Convert the raw edge results into the structured response format expected by the frontend.
-        This includes determining the overall status, extracting connection and sensor statuses, and summarizing ingestion results.
-
-            Args:
-
-        - edge_results: dict mapping gateway IDs to their DeviceResult objects, which contain the raw responses from the edge devices.
-        
-
-            Returns: a dict containing the overall status, connection status, sensor status, and ingestion summary.
-
-        """
-        ingestion_summary = {}
-        db_service = current_app.config.get("DB_SERVICE")
-        if db_service and db_service.is_connected():
-            ingestion_summary = ingest_edge_results(db_service, edge_results)
-        else:
-            ingestion_summary = {"warning": "DB_SERVICE not available — data not persisted"}
-
-        # Determine overall status
-        any_success = any(r.gateway_info.status == "success" for r in edge_results.values())
-        overall_status = "success" if any_success else "error"
-        http_code = 200 if any_success else 502
-
-        return {
-            "status": overall_status,
-            "connection_status": {gw: r.gateway_info.status for gw, r in edge_results.items()},
-            "sensor_status": {f"{gw}:{dev}": d.status for gw, r in edge_results.items() for dev, d in r.records.items()},
-            "devices": edge_results,
-            "ingestion_summary": ingestion_summary,
-        }, http_code
     
     def _send_command_to_sensors(self, command: str, targets: dict[str, list[str]]) -> dict[str, DeviceResult] | str:
-        """
+        """ 
         Input:
         - command: str 
 
@@ -151,33 +124,14 @@ class CommandDispatcher:
             command = command,
             target = targets,
         )
-        # Validate response structure with Pydantic
         try:
-            EdgeResults(edge=edge_results)
+            EdgeResults(edge=edge_results) # validate the structure of the response using the EdgeResults pydantic model. If the structure is invalid, a ValidationError will be raised, which we catch and return as an error message.
             return edge_results
         except ValidationError as ve:
             print(f"Pydantic validation error: {ve}")
             return f"Pydantic validation error: {ve}"
 
         
-        ingestion_summary = {}
-        db_service = current_app.config.get("DB_SERVICE")
-        if db_service and db_service.is_connected():
-            ingestion_summary = ingest_edge_results(db_service, edge_results)
-        else:
-            ingestion_summary = {"warning": "DB_SERVICE not available — data not persisted"}
-
-        # Determine overall status
-        any_success = any(r["status"] == "success" for r in edge_results.values())
-        overall_status = "success" if any_success else "error"
-        http_code = 200 if any_success else 502
-        return jsonify({
-            "status": overall_status,
-            "connection_status": {gw: r["status"] for gw, r in edge_results.items()},
-            "sensor_status": {f"{gw}:{dev}": d["status"] for gw, r in edge_results.items() for dev, d in r["records"].items()},
-            "devices": edge_results,
-            "ingestion_summary": ingestion_summary,
-        }), http_code
 
     def _send_command_to_actuators(self, command: str, actuators: dict[str, list[str]]):
         """
@@ -272,7 +226,16 @@ def get_history(parameter: str):
 
 @bp_operator.route("/commands/send", methods=["POST"])
 def send():
-    data = request.get_json()
+    '''
+    Expected JSON body: 
+        {"command_id": "string", 
+        "issued_by": "string", 
+        "target": 
+        {"gateway_id": ["sensor_id", ...], ...}}
+    '''
+    data = request.get_json() # get the JSON body of the request
+    if not data:
+        return jsonify({"status": "error", "message": "Missing JSON body"}), 400
     command_id = str(data.get("command_id")).lower()
     operator_id = str(data.get("issued_by")).lower()
     target = dict(data.get("target"))
@@ -280,7 +243,13 @@ def send():
     # Dispatch the command to the appropriate edge devices
     edge_results = dispatcher.send_command(command=command_id, target=target)
 
-    return jsonify(edge_results)
+    # Here I should do two steps:
+    # 1. return the results to the frontend
+    # 2. save the results to the database for historical analysis and visualization in the frontend
+
+    # Fire-and-forget DB save without blocking the response to the frontend
+    _executor.submit(ingest_edge_results, current_app.config.get("DB_SERVICE"), edge_results, submitter=operator_id)
+    return jsonify(edge_results), 200
 
 def register_operator_routes(app):
     app.register_blueprint(bp_operator)

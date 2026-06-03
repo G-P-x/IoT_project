@@ -117,9 +117,12 @@ def send_command_to_sensors(command, target: dict):
             - "error":   Error description (if error)
     """
     
-    gateway_ids = list(target.keys()) if isinstance(target, dict) else list(cfg.EDGE_DEVICES.keys())
-    field_devices = list(target.values()) if isinstance(target, dict) else [[] for _ in gateway_ids]
-    urls = [_build_url(cfg.EDGE_DEVICES[gateway_id]) for gateway_id in gateway_ids] if gateway_ids is not None else list(cfg.EDGE_DEVICES.values())
+    gateway_ids = list(target.keys()) if isinstance(target, dict) else list(cfg.EDGE_DEVICES.keys()) # get the list of gateway IDs from the target dict, or use all configured gateways if target is not a dict, basically sending the command to all devices..
+
+    field_devices = list(target.values()) if isinstance(target, dict) else [[] for _ in gateway_ids] # get the list of field devices for each gateway from the target dict, or use empty lists if target is not a dict (which means all devices for each gateway)
+    # if field_devices is empty for a gateway, the edge device will interpret that as "apply the command to all sensors linked to the gateway", so we can safely use empty lists for the case where target is not a dict (i.e. send to all devices).
+
+    urls = [_build_url(cfg.EDGE_DEVICES[gateway_id]) for gateway_id in gateway_ids] if gateway_ids is not None else list(cfg.EDGE_DEVICES.values()) # gets the list of base URLs for the target gateways, or all configured gateways if target is not a dict.
     assert len(urls) > 0, "No devices to send command to."
 
     # If both gateway_ids and field_devices are provided, check that they have the same length. This is a sanity check to ensure that the input dict is well-formed (each gateway_id should correspond to one field device URL).
@@ -144,6 +147,7 @@ def send_command_to_sensors(command, target: dict):
             except Exception as e:
                 print(f"Error sending command to gateway {gateway_id}: {e}")
                 results[gateway_id] = _normalize_result({"status": "error", "code": CUSTOM_ERROR_CODE, "error": str(e), "req_timestamp": datetime.now(timezone.utc).isoformat()})
+                
     return results
 
 def _build_poll_url(base_url: str) -> str:

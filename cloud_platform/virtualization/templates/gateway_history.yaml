@@ -20,6 +20,7 @@ schemas:
     data:
       status: str                   # Gateway status at this point in time
       source: str                   # Origin of the event (monitor, operator, recovery)
+      operator_id: str | None       # Optional identifier of the operator who triggered the status change (if applicable)
 
   validations:
     mandatory_fields:
@@ -40,11 +41,13 @@ schemas:
         type: datetime
       status:
         type: str
-        enum: ["active", "inactive", "maintenance"]
+        enum: ["active", "inactive"]
       source:
         type: str
-        enum: ["monitor"]
-      
+        enum: ["telemetry", "operator"]
+      operator_id:
+        type: str | None
+
     initialization:
       root:
         record_type: "gateway_status_event"

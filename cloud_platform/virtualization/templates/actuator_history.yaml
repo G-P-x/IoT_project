@@ -23,7 +23,8 @@ schemas:
       result: str                   # Result of the command execution (success, failure, etc.)
       reason: str                   # Optional reason for failure or additional context
       source: str                   # Origin of the command (operator, automation, recovery)
-
+      operator_id : str
+      
   validations:
     mandatory_fields:
       root:
