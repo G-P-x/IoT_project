@@ -91,6 +91,9 @@ class HistoryFactory:
         """
         DataModel = self._create_data_model()
 
+        if "_id" in initial_data:
+            raise ValueError("Caller must not provide _id")
+
         record = {
             "_id": str(uuid.uuid4()),
             "data": {},
@@ -105,6 +108,8 @@ class HistoryFactory:
         init_values = (
             self.schema["schemas"].get("validations", {}).get("initialization", {})
         )
+        if "root" in init_values and "_id" in (init_values.get("root") or {}):
+            raise ValueError("Initialization defaults must not set _id")
         data_fields = self.schema["schemas"].get("entity", {}).get("data", {})
 
         for section, defaults in init_values.items():
