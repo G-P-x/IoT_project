@@ -87,6 +87,7 @@ def _send_http_command(url, command, field_devices):
     
 
     try:
+        print(f"Sending command to {url} with payload: {payload}")
         response = requests.post(url, json=payload, timeout=10)
         response.raise_for_status()
         body = response.json()
@@ -122,7 +123,10 @@ def send_command_to_sensors(command, target: dict):
     field_devices = list(target.values()) if isinstance(target, dict) else [[] for _ in gateway_ids] # get the list of field devices for each gateway from the target dict, or use empty lists if target is not a dict (which means all devices for each gateway)
     # if field_devices is empty for a gateway, the edge device will interpret that as "apply the command to all sensors linked to the gateway", so we can safely use empty lists for the case where target is not a dict (i.e. send to all devices).
 
-    urls = [_build_url(cfg.EDGE_DEVICES[gateway_id]) for gateway_id in gateway_ids] if gateway_ids is not None else list(cfg.EDGE_DEVICES.values()) # gets the list of base URLs for the target gateways, or all configured gateways if target is not a dict.
+    urls = [cfg.EDGE_DEVICES[gateway_id] for gateway_id in gateway_ids] if gateway_ids is not None else list(cfg.EDGE_DEVICES.values()) # gets the list of base URLs for the target gateways, or all configured gateways if target is not a dict.
+    print(f"send_command_to_sensors → Target gateways: {gateway_ids}")
+    print(f"send_command_to_sensors → Target field devices: {field_devices}")
+    print(f"send_command_to_sensors → Target URLs: {urls}")
     assert len(urls) > 0, "No devices to send command to."
 
     # If both gateway_ids and field_devices are provided, check that they have the same length. This is a sanity check to ensure that the input dict is well-formed (each gateway_id should correspond to one field device URL).
@@ -149,9 +153,6 @@ def send_command_to_sensors(command, target: dict):
                 results[gateway_id] = _normalize_result({"status": "error", "code": CUSTOM_ERROR_CODE, "error": str(e), "req_timestamp": datetime.now(timezone.utc).isoformat()})
                 
     return results
-
-def _build_poll_url(base_url: str) -> str:
-    return base_url.rstrip("/") + cfg.POLL_ENDPOINT
 
 def _normalize_result(result):
     '''
@@ -201,6 +202,9 @@ def _normalize_result(result):
                     "timestamp": rec.get("timestamp"),
                 }
             return records
+
+        if isinstance(body, dict) and isinstance(body.get("body"), (list, dict)):
+            return _normalize_records(body.get("body"))
 
         if isinstance(body, dict) and isinstance(body.get("records"), list):
             records = {}
@@ -268,12 +272,13 @@ def poll_gateways():
     Poll all gateways for new data.
     '''
     results = {}
-    
+    print(f"Polling gateways: {list(cfg.EDGE_DEVICES.keys())}")
+    print(f"Polling URLs: {[url for url in cfg.EDGE_DEVICES.values()]}")
 
     with ThreadPoolExecutor(max_workers=len(cfg.EDGE_DEVICES) or 1) as executor:
         # Submit one polling task per  gateway
         future_to_gateway = {
-            executor.submit(_poll_gateway, _build_poll_url(url)): gateway_id
+            executor.submit(_poll_gateway, url): gateway_id
             for gateway_id, url in cfg.EDGE_DEVICES.items()
         }
         # creates a dict mapping Future (an object created by executor.submit) → gateway_id, so we can identify which gateway corresponds 
@@ -286,6 +291,7 @@ def poll_gateways():
         gateway_id = future_to_gateway[future]
         try:
             result = future.result() # Waits for the Future to complete and retrieves its result. 
+            print(f"Received poll result from gateway {gateway_id}: {result}")
             # If the Future completed successfully, result will contain the return value of _poll_gateway.
             results[gateway_id] = _normalize_result(result) # Store the result in the results dict, keyed by gateway_id. 
             #  Each result is a dict with "status", "code", "body" (if success) or "error" (if error).

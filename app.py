@@ -2,11 +2,13 @@ from flask import Flask
 from flask_cors import CORS
 from config.config import Config
 import asyncio
+import logging
 import threading
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from pyngrok import ngrok
 
 from cloud_platform.application.operator_api import register_operator_routes
+from cloud_platform.application import client_http
 from cloud_platform.telegram_bot.routes.webhook_routes import init_routes
 
 # ── DT Architecture imports ───────────────────────────────────────────
@@ -17,6 +19,9 @@ from cloud_platform.services.database_service import DatabaseService
 from cloud_platform.digital_twin.dt_factory import DTFactory
 from cloud_platform.application.dt_api import register_dt_api_blueprints
 from config.config_loader import ConfigLoader
+from cloud_platform.services.data_ingestion import ingest_edge_results
+
+logger = logging.getLogger(__name__)
 
 class TelegramBot:
     def __init__(self, cfg: Config):
@@ -131,7 +136,10 @@ class FlaskServer:
     def _register_blueprints(self, telegram_application=None):
         # Existing routes
         register_operator_routes(self.app)
-        init_routes(self.app, telegram_application)
+        if telegram_application is not None:
+            init_routes(self.app, telegram_application)
+        else:
+            logger.warning("Telegram bot not initialized; webhook routes not registered.")
 
         # DT Architecture API routes (DT CRUD, DR CRUD, service management)
         register_dt_api_blueprints(self.app)
@@ -160,52 +168,60 @@ class FlaskServer:
                     if loop_thread:
                         loop_thread.join()
 
-# def create_app() -> Flask:
-#     # Expose needed config to Flask
-#     app.config.update(
-#         DEFAULT_TWIN_ID=cfg.DEFAULT_TWIN_ID,
-#         TOPIC_COMMANDS_DOWNLINK=cfg.TOPIC_COMMANDS_DOWNLINK,
-#     )
 
-#     # DB + Services
-#     mongo = MongoDB(cfg.MONGO_URI, cfg.MONGO_DB_NAME)
-#     dt = DTService(
-#         twins=mongo.collections.twins,
-#         telemetry=mongo.collections.telemetry,
-#         health=mongo.collections.health,
-#         commands=mongo.collections.commands,
-#         anomalies=mongo.collections.anomalies,
-#     )
+class GatewayPoller:
+    def __init__(self, db_service: DatabaseService, poll_interval_ms: int):
+        self.db_service = db_service
+        self.poll_interval_s = 5 # max(poll_interval_ms, 1000) / 1000.0
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
 
-#     # MQTT client (subscriber)
-#     mqttc = MQTTClient(cfg, dt)
+    def start(self) -> None:
+        self._thread.start()
 
-#     # Attach as Flask extensions so routes can access
-#     app.extensions["mongo"] = mongo
-#     app.extensions["dt_service"] = dt
-#     app.extensions["mqtt_client"] = mqttc
+    def stop(self) -> None:
+        self._stop_event.set()
+        self._thread.join(timeout=10)
 
-#     # Register routes using Blueprints, this creates modular route groups in separate files
-#     app.register_blueprint(bp_public)
-#     app.register_blueprint(bp_operator)
-#     app.register_blueprint(bp_commands)
-#     app.register_blueprint(bp_frontend)
+    def _run(self) -> None:
+        logger.info("Gateway poller started (interval=%.2fs)", self.poll_interval_s)
+        while not self._stop_event.is_set():
+            try:
+                results = client_http.poll_gateways()
+                ingest_edge_results(self.db_service, results, submitter=None, command=None)
+            except Exception as exc:
+                logger.exception("Gateway polling failed: %s", exc)
 
-#     # Start MQTT once
-#     # IMPORTANT: when Flask debug reloader is on, it runs twice. Avoid double-start.
-#     if not cfg.FLASK_DEBUG:
-#         mqttc.start()
-#     else:
-#         # In debug, only start MQTT in the reloader child process
-#         # Werkzeug sets WERKZEUG_RUN_MAIN='true' in the child.
-#         if os.environ.get("WERKZEUG_RUN_MAIN") == "true":
-#             mqttc.start()
+            self._stop_event.wait(self.poll_interval_s)
 
-#     return app
 
+def _get_db_service(server: FlaskServer) -> DatabaseService:
+    db_service = server.app.config.get("DB_SERVICE")
+    if not db_service:
+        raise RuntimeError("DB_SERVICE not initialized on Flask app")
+    return db_service
 
 if __name__ == "__main__":
     cfg = Config()
-    telegram_bot = TelegramBot(cfg)
-    server = FlaskServer(cfg, telegram_application=telegram_bot.application)
-    server.run(host=cfg.FLASK_HOST, port=cfg.FLASK_PORT, debug=cfg.FLASK_DEBUG, application=telegram_bot.application)
+    telegram_bot = None
+    if cfg.TELEGRAM_BOT_TOKEN:
+        telegram_bot = TelegramBot(cfg)
+    else:
+        logger.warning("TELEGRAM_BOT_TOKEN missing; skipping Telegram bot startup.")
+
+    server = FlaskServer(
+        cfg,
+        telegram_application=telegram_bot.application if telegram_bot else None,
+    )
+    # poller = GatewayPoller(_get_db_service(server), cfg.POLLING_INTERVAL_MS)
+    # poller.start()
+    try:
+        server.run(
+            host=cfg.FLASK_HOST,
+            port=cfg.FLASK_PORT,
+            debug=cfg.FLASK_DEBUG,
+            application=telegram_bot.application if telegram_bot else None,
+        )
+    finally:
+        # poller.stop()
+        pass

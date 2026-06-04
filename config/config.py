@@ -15,12 +15,15 @@ class Config:
     HTTP_ENDPOINT_PORT = int(os.getenv("HTTP_ENDPOINT_PORT", "5000"))
 
     ### ---------- Edge devices ----------
-    EDGE_DEVICES_RAW = os.getenv("EDGE_DEVICES", "{}")
-    try:
-        EDGE_DEVICES = json.loads(EDGE_DEVICES_RAW)
-    except json.JSONDecodeError:
-        print(f"Error parsing EDGE_DEVICES: {EDGE_DEVICES_RAW}. Expected JSON format.")
-        EDGE_DEVICES = {}
+    EDGE_DEVICES = {
+        "gateway_01": "http://127.0.0.1:5050/gtw_01",
+        "gateway_02": "http://127.0.0.1:5050/gtw_02",
+    }
+    # try:
+    #     EDGE_DEVICES = json.loads(EDGE_DEVICES_RAW)
+    # except json.JSONDecodeError:
+    #     print(f"Error parsing EDGE_DEVICES: {EDGE_DEVICES_RAW}. Expected JSON format.")
+    #     EDGE_DEVICES = {}
 
     POLL_ENDPOINT = os.getenv("POLL_ENDPOINT", "/data")
     # HTTP Polling interval (ms)

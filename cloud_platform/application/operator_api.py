@@ -22,27 +22,6 @@ import random
 
 # executor for returning results to the frontend without waiting for  database ingestion to complete
 _executor = ThreadPoolExecutor(max_workers=2)
-# ── pydantic for enhanced data validation ──────────────────────────────────────────
-# class GatewayInfo(BaseModel):
-#     status: Literal["success", "error"]
-#     code: int
-#     error: str | None = None
-#     req_timestamp: str
-
-# class FieldDeviceResult(BaseModel):
-#     type: str                    # "temperature sensor" or "air quality sensor", etc.
-#     status: str                    # "ERROR" or "OK"
-#     severity: str                  # "critical", "warning", "info"
-#     value: float | None          # present if status is OK
-#     message: str                # "reading acquired" or "invalid sensor_id", etc.
-#     timestamp: str              # ISO datetime string of when the reading was taken
-
-# class DeviceResult(BaseModel):
-#     gateway_info: GatewayInfo
-#     records: dict[str, FieldDeviceResult]
-
-# class EdgeResults(BaseModel):
-#     edge: dict[str, DeviceResult]  # gateway_id → DeviceResult
 
 # ────────────────── Command Dispatcher ──────────────────
 class CommandDispatcher:
@@ -144,29 +123,30 @@ dispatcher = CommandDispatcher()
 bp_operator = Blueprint("operator_api", __name__, url_prefix="/operator")
 
 # ── Load Templates Roots ──────────────────────────────────────────
-@bp_operator.route("/home", methods=["GET"])
+
+@bp_operator.route("", methods=["GET"])
 def home():
-    return render_template("home.html")
+    return jsonify({"message": "Welcome to the Operator API. Use /operator/history/<parameter> to view telemetry history and /operator/commands/send to send commands to the DT."})
 
-@bp_operator.route("/history", methods=["GET"])
-def history():
-    return render_template("history.html")
-
-@bp_operator.route("/commands", methods=["GET"])
+@bp_operator.route("/commands", methods=["POST"])
 def commands():
-    return render_template("commands.html")
+    # Retrieve the JSON data from the request body
+    data = request.get_json()
 
-@bp_operator.route("/manage", methods=["GET"])
-def manage():
-    return render_template("manage.html")
+    # Accessing the fields
+    command_id = data.get("command_id")
+    issued_by = data.get("issued_by")
+    target = data.get("target")
 
-@bp_operator.route("/health", methods=["GET"])
-def health():
-    return render_template("health.html")
+    # Example: Process the data here...
+    print(f"Received command {command_id} from {issued_by}")
 
-@bp_operator.route("/anomalies", methods=["GET"])
-def anomalies():
-    return render_template("anomalies.html")
+    # Return a success response
+    return jsonify({
+        "status": "success",
+        "message": f"Command {command_id} received successfully"
+    }), 200
+
 
 @bp_operator.route("/history/<parameter>", methods=["GET"])
 def get_history(parameter: str):
@@ -248,6 +228,7 @@ def send():
     # 2. save the results to the database for historical analysis and visualization in the frontend
 
     # Fire-and-forget DB save without blocking the response to the frontend
+    print(f"Submitting edge results to executor for database ingestion: {edge_results}")
     _executor.submit(ingest_edge_results, current_app.config.get("DB_SERVICE"), edge_results, submitter=operator_id, command=command_id)
     return jsonify(edge_results), 200
 

@@ -135,7 +135,6 @@ def _link_sensor_to_gateway(db_service, gateway_id: str, sensor_dr_id: str) -> N
             sensors_list.append(sensor_dr_id)
             db_service.update_dr("gateway", gateway_id, {
                 "data": {"sensors": sensors_list},
-                "metadata": {"updated_at": datetime.utcnow()},
             })
     except Exception as e:
         logger.warning("Failed to link sensor %s to gateway %s: %s", sensor_dr_id, gateway_id, e)
@@ -211,7 +210,7 @@ def _create_actuator_record(gateway_id, actuator_id: str, record: Dict, sub: str
 
 def _create_gateway_dr_entry(gateway_id: str, gateway_info: Dict, sensors : List[str] = [], actuators: List[str] = []) -> dict:
     '''
-    Create a gateway DR entry dict with the given info. It does not enforce an _id.
+    Create a gateway DR entry dict with the given info. The factory assigns _id.
 
     Args:
         - gateway_id: the physical device_id of the gateway
