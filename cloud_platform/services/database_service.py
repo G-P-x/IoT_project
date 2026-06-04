@@ -121,10 +121,6 @@ class DatabaseService:
                     rejected_events[event.get("device_id", "unknown")] = "missing _id"
                     continue
                 self._ensure_id(event, "History event")
-                # check if an event with the same device_id already exists in the collection
-                if collection.find_one("device_id", event.get("device_id")):
-                    rejected_events[event.get("device_id")] = f"device {event.get('device_id')} already exists in the same batch request"
-                    continue  # Skip this event and continue with the next one
                 unique.append(event)
             except Exception as e:
                 raise Exception(f"Failed to save history event: {str(e)}")
