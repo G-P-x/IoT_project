@@ -98,15 +98,15 @@ def _find_dr(db_service: DatabaseService, device_id: str) -> Optional[Dict]:
     return None
 
 
-def _create_sensor_dr_entry(db_service: DatabaseService, gateway_id: str, sensor_id: str, record: Dict) -> dict:
+def _create_sensor_dr_entry(gateway_id: str, sensor_id: str, record: Dict) -> dict:
     # ── Auto-create ──────────────────────────────────────────────────
     sensor_type = _infer_sensor_type(sensor_id)
     unit = UNIT_MAP.get(sensor_type, "")
 
     initial_data = {
         "profile": {
-            "sensor_id": sensor_id,
-            "sensor_type": sensor_type,
+            "device_id": sensor_id,
+            "device_type": sensor_type,
             "unit": unit,
             "description": f"Auto-created from gateway '{gateway_id}' response",
             "gateway_id": gateway_id or "",
@@ -115,11 +115,10 @@ def _create_sensor_dr_entry(db_service: DatabaseService, gateway_id: str, sensor
 
     dr_factory = DRFactory("cloud_platform/virtualization/templates/sensor.yaml")
     sensor_dr = dr_factory.create_dr("sensor", initial_data)
-    db_service.save_dr("sensor", sensor_dr)
 
     logger.info(
-        "Auto-created sensor DR '%s' (type=%s) for gateway '%s'",
-        sensor_dr["_id"], sensor_type, gateway_id,
+        "Auto-created sensor DR entry (type=%s) for gateway '%s'",
+        sensor_type, gateway_id,
     )
     return sensor_dr
 
@@ -228,6 +227,7 @@ def _create_gateway_dr_entry(gateway_id: str, gateway_info: Dict, sensors : List
     dr_factory = DRFactory("cloud_platform/virtualization/templates/gateway.yaml")
     initial_data = {
         "profile": {
+            "name": f"Gateway {gateway_id}",
             "device_id": gateway_id,
         },
         "data": {
@@ -300,7 +300,7 @@ def _collect_latest_sensor_readings(records: Dict[str, Dict]) -> tuple[list[str]
 
 def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, DeviceResult], submitter: str | None, command: str | None) -> Dict:
     """
-    Process the full edge_results dict returned by send_command_to_all_devices()
+    Process the full edge_results dict returned by send_command_to_all_devices() and poll_gateways()
     and persist every successful sensor reading into the corresponding DRs.
 
     Args:

@@ -197,7 +197,7 @@ class DRFactory:
         root_fields = {
             field_name: field_type
             for field_name, field_type in common_fields.items()
-            if field_name not in ("profile", "metadata")
+            if field_name not in ("profile", "metadata", "_id")
             and not isinstance(field_type, dict)
         }
         mandatory_fields = (

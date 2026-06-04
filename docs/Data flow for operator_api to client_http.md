@@ -13,7 +13,7 @@ This document describes the command dispatch path and data structures between th
 
 ```mermaid
 sequenceDiagram
-  participant UI
+  participant OperatorUI
   participant OperatorAPI
   participant Dispatcher (class)
   participant ClientHTTP
@@ -21,7 +21,7 @@ sequenceDiagram
   participant DataIngestion
   participant GatewayHistory
 
-  UI->>OperatorAPI: POST /operator/commands/send
+  OperatorUI->>OperatorAPI: POST /operator/commands/send
   OperatorAPI->>Dispatcher(class): send_command(command_id, target)
   Dispatcher(class)->>ClientHTTP: send_command_to_sensors(command_id, target)
   ClientHTTP->>Gateway: POST {command, sensors}

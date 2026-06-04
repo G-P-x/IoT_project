@@ -2,7 +2,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 import requests
 from config.config import Config
-from datetime import datetime, timezone
+from datetime import datetime, timezone, time
 
 # payload format:
 # {
@@ -292,21 +292,11 @@ def poll_gateways():
         except Exception as e:
             print(f"Error polling gateway {gateway_id}: {e}")
             results[gateway_id] = _normalize_result({"status": "error", "code": CUSTOM_ERROR_CODE, "error": str(e), "req_timestamp": datetime.now(timezone.utc).isoformat()})
-            # results[gateway_id] = {
-            #     "gateway_info": {
-            #          "status": "error", 
-            #          "code": CUSTOM_ERROR_CODE, 
-            #          "error": str(e), 
-            #          "req_timestamp": datetime.now(timezone.utc).isoformat()
-            #         },
-            #     "records": {}
-            #    }
+
     return results
 
-if __name__ == "__main__":
-    ## IMPORTANT: this test code is meant to be run as a standalone script to test the client_http module in isolation.
-    # Run it as a module from the project root: python -m cloud_platform.application.client_http
 
+def test():
     import json as json_module
     from unittest.mock import patch, MagicMock
 
@@ -493,3 +483,36 @@ if __name__ == "__main__":
     print("\n" + "=" * 60)
     print("All tests completed.")
     print("=" * 60)
+
+if __name__ == "__main__":
+    # a way to use this module to poll gateways and ingest data into the cloud platform, simulating the cloud platform's client_http.py
+    import time as time_module
+    from cloud_platform.services.database_service import DatabaseService
+    from cloud_platform.virtualization.digital_replica.schema_registry import SchemaRegistry
+    from config.config_loader import ConfigLoader
+    from cloud_platform.services.data_ingestion import ingest_edge_results
+
+    schema_registry = SchemaRegistry()
+    schema_registry.load_schema("gateway", "cloud_platform/virtualization/templates/gateway.yaml")
+    schema_registry.load_schema("sensor", "cloud_platform/virtualization/templates/sensor.yaml")
+    schema_registry.load_schema("actuator", "cloud_platform/virtualization/templates/actuator.yaml")
+    schema_registry.load_schema("history", "cloud_platform/virtualization/templates/sensor_history.yaml") 
+
+    db_config = ConfigLoader.load_database_config()
+    connection_string = ConfigLoader.build_connection_string(db_config)
+
+    db_service = DatabaseService(
+        connection_string=connection_string,
+        db_name=db_config["settings"]["name"],
+        schema_registry=schema_registry,
+    )
+    db_service.connect()
+
+    poll_interval_s = getattr(cfg, "POLLING_INTERVAL_MS", 5000) / 1000.0
+
+    print(f"Starting polling loop. Interval: {poll_interval_s}s")
+    # Run it as a module from the project root: python -m cloud_platform.application.client_http
+    while True:
+        results = poll_gateways()
+        ingest_edge_results(db_service, results, submitter=None, command=None)
+        time_module.sleep(poll_interval_s)

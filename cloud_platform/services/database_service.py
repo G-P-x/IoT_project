@@ -196,7 +196,7 @@ class DatabaseService:
         except Exception as e:
             raise Exception(f"Failed to query Digital Replicas: {str(e)}")
 
-    def update_dr(self, collection_name: str = "device", dr_id: str, update_data: Dict) -> None:
+    def update_dr(self, collection_name: str, dr_id: str, update_data: Dict) -> None:
         """
         Partially update a DR document using MongoDB $set.
 
