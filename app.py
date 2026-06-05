@@ -213,8 +213,8 @@ if __name__ == "__main__":
         cfg,
         telegram_application=telegram_bot.application if telegram_bot else None,
     )
-    # poller = GatewayPoller(_get_db_service(server), cfg.POLLING_INTERVAL_MS)
-    # poller.start()
+    poller = GatewayPoller(_get_db_service(server), cfg.POLLING_INTERVAL_MS)
+    poller.start()
     try:
         server.run(
             host=cfg.FLASK_HOST,
@@ -223,5 +223,5 @@ if __name__ == "__main__":
             application=telegram_bot.application if telegram_bot else None,
         )
     finally:
-        # poller.stop()
+        poller.stop()
         pass
