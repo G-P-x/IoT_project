@@ -44,18 +44,6 @@ from cloud_platform.services.database_service import DatabaseService # used just
 
 logger = logging.getLogger(__name__)
 
-# ── Sensor-type inference from physical ID suffix ─────────────────────
-# Gateway sensor IDs follow the pattern "<MAC>-<suffix>" where the suffix
-# hints at the sensor kind.  This map is the single place to extend when
-# new sensor types are added to the edge firmware.
-SENSOR_TYPE_MAP = {
-    "t":  "temperature",
-    "aq": "air_quality",
-    "s":  "seismic_waves",
-    "h":  "humidity",
-    "g":  "gas",
-}
-
 # Measurement units per sensor type
 UNIT_MAP = {
     "temperature":   "°C",
@@ -65,24 +53,24 @@ UNIT_MAP = {
     "gas":           "ppm",
 }
 
+SENSOR_TYPE_MAP = {"sensor_t1": "temperature", 
+                "sensor_aq1": "air_quality", 
+                "sensor_t2": "temperature",
+                "sensor_aq2": "air_quality"}
+
 
 def _infer_sensor_type(physical_sensor_id: str) -> str:
     """
-    Derive the sensor type from the physical sensor ID suffix.
+    Get the sensor type from the physical sensor ID.
 
     Examples:
-        "84F3EB12A0BC-t1"  → "temperature"
-        "84F3EB12A0BC-aq1" → "air_quality"
-        "FFEEDDCCBBAA-s1"  → "seismic_waves"
+        "sensor_t1"  → "temperature"
+        "sensor_aq1" → "air_quality"
+        "sensor_s1"  → "seismic_waves"
 
-    Falls back to "unknown" if the suffix is not recognised.
+    Falls back to "unknown" if the sensor ID is not recognised.
     """
-    # Split on '-' and take the last segment, then strip trailing digits
-    parts = physical_sensor_id.rsplit("-", 1)
-    if len(parts) < 2:
-        return "unknown"
-    suffix = parts[1].rstrip("0123456789")  # "t1" → "t", "aq1" → "aq"
-    return SENSOR_TYPE_MAP.get(suffix, "unknown")
+    return SENSOR_TYPE_MAP.get(physical_sensor_id, "unknown")
 
 def _find_dr(db_service: DatabaseService, device_id: str) -> Optional[Dict]:
     """
@@ -97,30 +85,6 @@ def _find_dr(db_service: DatabaseService, device_id: str) -> Optional[Dict]:
         return existing[0]
     return None
 
-
-def _create_sensor_dr_entry(gateway_id: str, sensor_id: str, record: Dict) -> dict:
-    # ── Auto-create ──────────────────────────────────────────────────
-    sensor_type = _infer_sensor_type(sensor_id)
-    unit = UNIT_MAP.get(sensor_type, "")
-
-    initial_data = {
-        "profile": {
-            "device_id": sensor_id,
-            "device_type": sensor_type,
-            "unit": unit,
-            "description": f"Auto-created from gateway '{gateway_id}' response",
-            "gateway_id": gateway_id or "",
-        },
-    }
-
-    dr_factory = DRFactory("cloud_platform/virtualization/templates/sensor.yaml")
-    sensor_dr = dr_factory.create_dr("sensor", initial_data)
-
-    logger.info(
-        "Auto-created sensor DR entry (type=%s) for gateway '%s'",
-        sensor_type, gateway_id,
-    )
-    return sensor_dr
 
 def _link_sensor_to_gateway(db_service, gateway_id: str, sensor_dr_id: str) -> None:
     """
@@ -240,6 +204,30 @@ def _create_gateway_dr_entry(gateway_id: str, gateway_info: Dict, sensors : List
     }
     gateway_dr = dr_factory.create_dr("gateway", initial_data)
     return gateway_dr
+
+def _create_sensor_dr_entry(gateway_id: str, sensor_id: str, record: Dict) -> dict:
+    # ── Auto-create ──────────────────────────────────────────────────
+    sensor_type = _infer_sensor_type(sensor_id)
+    unit = UNIT_MAP.get(sensor_type, "")
+
+    initial_data = {
+        "profile": {
+            "device_id": sensor_id,
+            "device_type": sensor_type,
+            "unit": unit,
+            "description": f"Auto-created from gateway '{gateway_id}' response",
+            "gateway_id": gateway_id or "",
+        },
+    }
+
+    dr_factory = DRFactory("cloud_platform/virtualization/templates/sensor.yaml")
+    sensor_dr = dr_factory.create_dr("sensor", initial_data)
+
+    logger.info(
+        "Auto-created sensor DR entry (type=%s) for gateway '%s'",
+        sensor_type, gateway_id,
+    )
+    return sensor_dr
 
 def  _parse_record_timestamp(value: str | None) -> Optional[datetime]:
     if isinstance(value, datetime):
