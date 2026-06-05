@@ -366,10 +366,10 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
                 db_service.update_dr("sensor", dr_entry["_id"], {
                     "data": {
                         "value": device_data.get("value"),
-                        "timestamp": device_data.get("timestamp"),
                     },
                     "metadata": {
-                        "updated_at": datetime.utcnow(),
+                        "last_update": device_data.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                        "status": "active" if device_data.get("status") == "OK" else "inactive",
                     },
                 })
 
@@ -388,7 +388,7 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
                             "timestamp": device_data.get("timestamp"),
                         },
                         "metadata": {
-                            "updated_at": datetime.utcnow(),
+                            "last_update": device_data.get("timestamp", datetime.now(timezone.utc).isoformat()),
                         },
                     })
 

@@ -241,7 +241,6 @@ class DatabaseService:
         """
         Partially update a DR document using MongoDB $set.
 
-        The metadata.updated_at timestamp is always refreshed automatically.
         Nested dicts in update_data are flattened to dot-notation keys so that
         only the specified sub-fields are touched (instead of replacing the
         whole subdocument).
@@ -260,11 +259,6 @@ class DatabaseService:
         try:
             collection_name = self.schema_registry.get_collection_name(collection_name)
 
-            # Always bump the updated_at timestamp
-            if "metadata" not in update_data:
-                update_data["metadata"] = {}
-            update_data["metadata"]["updated_at"] = datetime.utcnow()
-
             # Flatten nested dicts → dot-notation so $set only touches leaf fields
             flat_update = self._flatten_for_set(update_data)
 
@@ -272,11 +266,6 @@ class DatabaseService:
                 {"_id": dr_id},
                 {"$set": flat_update}
             )
-
-            if result.matched_count == 0:
-                raise ValueError(f"Digital Replica not found: {dr_id}")
-        except Exception as e:
-            raise Exception(f"Failed to update Digital Replica: {str(e)}")
 
     def delete_dr(self, dr_type: str, dr_id: str) -> None:
         """
