@@ -266,6 +266,8 @@ class DatabaseService:
                 {"_id": dr_id},
                 {"$set": flat_update}
             )
+        except Exception as e:
+            raise Exception(f"Failed to update Digital Replica: {str(e)}")
 
     def delete_dr(self, dr_type: str, dr_id: str) -> None:
         """
