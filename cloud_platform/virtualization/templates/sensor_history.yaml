@@ -20,7 +20,7 @@ schemas:
 
   entity:
     data:
-      value: float                  # Sensor reading value
+      value: float | None           # Sensor reading value
       source: str                   # Origin of the reading (monitor, operator, recovery)
       status: str                   # Status of the sensor at the time of reading (e.g., "active", "inactive")
       operator_id: str | None       # If source is "operator", the ID of the operator who triggered the reading, else None
@@ -52,7 +52,7 @@ schemas:
       timestamp:
         type: datetime
       value:
-        type: float
+        type: float | None
       status:
         type: str
         enum: ["active", "inactive"]
