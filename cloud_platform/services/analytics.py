@@ -15,9 +15,14 @@ Architecture reasoning (from the lecture):
   'air_quality', 'seismic_waves', etc.
 """
 
-from typing import Dict
+import logging
+from typing import Dict, List, Optional
 import statistics
 from cloud_platform.services.base import BaseService
+from cloud_platform.services.database_service import DatabaseService
+
+
+logger = logging.getLogger(__name__)
 
 
 class AggregationService(BaseService):
@@ -92,3 +97,125 @@ class AggregationService(BaseService):
                 stats[mtype] = {"error": str(e), "count": len(values)}
 
         return stats
+    
+class MonitorService(BaseService):
+    """
+    Service for monitoring measurements across Digital Replicas.
+
+    This service receives the DR data and decides, based on the thresholds defined for each attribute, whether to activate the heuristic to detect anomalies.
+    """
+    @staticmethod
+    def _is_monotonic_increasing(values: List[float]) -> bool:
+        return len(values) >= 2 and all(current > previous for previous, current in zip(values, values[1:]))
+
+    @staticmethod
+    def _extract_history_values(history_records: List[Dict]) -> List[float]:
+        values: List[float] = []
+        for record in reversed(history_records):
+            value = record.get("data", {}).get("value")
+            if value is None:
+                continue
+            values.append(float(value))
+        return values
+
+    def execute(
+        self,
+        data: Dict,
+        dr_type: str = 'sensor',
+        attribute: str | None = None,
+        db_service: Optional[DatabaseService] = None,
+        history_limit: int = 20,
+    ) -> Dict:
+        if dr_type == "actuator" or dr_type == "gateway":
+            return {"error": "Monitoring is applicable only to sensor-type Digital Replicas."}
+
+        if not data or "digital_replicas" not in data:
+            raise ValueError("Invalid data: missing 'digital_replicas' key")
+
+        drs = [
+            dr for dr in data["digital_replicas"]
+            if dr_type is None or dr.get("dr_type") == dr_type or dr.get("type") == dr_type
+        ]
+
+        for dr in drs:
+            data_fields = dr.get("data", {})
+            value = data_fields.get("current_value")
+            sensor_id = dr.get("profile", {}).get("device_id", dr.get("_id", "unknown"))
+
+            if value is None:
+                print(f"DR {sensor_id} has no 'current_value' in data, skipping.")
+                continue
+
+            min_threshold = data_fields.get("alert_threshold_min")
+            if min_threshold is None:
+                print(f"DR {sensor_id} has no 'alert_threshold_min' in data, skipping.")
+                continue
+
+            max_threshold = data_fields.get("alert_threshold_max")
+            if max_threshold is None:
+                print(f"DR {sensor_id} has no 'alert_threshold_max' in data, skipping.")
+                continue
+
+            if value > max_threshold:
+                return {"alert": f"Value {value} exceeds max threshold {max_threshold} in DR {sensor_id}"}
+
+            if value < min_threshold:
+                continue
+
+            if db_service is None:
+                logger.debug(
+                    "Skipping history analysis for DR %s because no db_service was provided.",
+                    sensor_id,
+                )
+                continue
+
+            history_records = db_service.query_history_records(sensor_id, limit=history_limit)
+            if len(history_records) < 5:
+                logger.debug(
+                    "Skipping monotonic check for %s because only %d history records were found.",
+                    sensor_id,
+                    len(history_records),
+                )
+                continue
+
+            values = self._extract_history_values(history_records)
+            if len(values) < 5:
+                logger.debug(
+                    "Skipping monotonic check for %s because only %d numeric values were found.",
+                    sensor_id,
+                    len(values),
+                )
+                continue
+
+            if self._is_monotonic_increasing(values):
+                message = (
+                    f"ALERT: Sensor {sensor_id} shows a monotonic increasing pattern "
+                    f"in the last {len(values)} history records: {values}"
+                )
+                print(message)
+                logger.warning(message)
+                return {"alert": message, "sensor_id": sensor_id, "history_count": len(values)}
+
+        return {}
+
+        
+
+class PredictionService(BaseService):
+    """
+    Service for making predictions based on measurements from Digital Replicas.
+
+    This service could implement machine learning models or simple heuristics
+    to forecast future values or detect anomalies.
+    """
+    def execute(self, data: Dict, dr_type: str = None, attribute: str = None) -> Dict:
+        pass
+
+class AlertingService(BaseService):
+    """
+    Service for generating alerts based on measurements from Digital Replicas.
+
+    This service could define thresholds for certain attributes and trigger alerts
+    when those thresholds are exceeded.
+    """
+    def execute(self, data: Dict, dr_type: str = None, attribute: str = None) -> Dict:
+        pass

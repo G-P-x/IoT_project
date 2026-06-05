@@ -209,6 +209,32 @@ class DatabaseService:
         except Exception as e:
             raise Exception(f"Failed to query Digital Replicas: {str(e)}")
 
+    def query_history_records(self, device_id: str, limit: int = 20) -> List[Dict]:
+        """
+        Query the latest history records for a sensor/device.
+
+        Args:
+            device_id: Physical device identifier to filter the history by.
+            limit: Maximum number of records to return.
+
+        Returns:
+            A list of matching history documents ordered from newest to oldest.
+        """
+        if not self.is_connected():
+            raise ConnectionError("Not connected to MongoDB")
+
+        try:
+            collection_name = self.schema_registry.get_collection_name("history")
+            cursor = (
+                self.db[collection_name]
+                .find({"device_id": device_id})
+                .sort("timestamp", -1)
+                .limit(limit)
+            )
+            return list(cursor)
+        except Exception as e:
+            raise Exception(f"Failed to query history records: {str(e)}")
+
     @staticmethod
     def _flatten_for_set(d: Dict, prefix: str = "") -> Dict:
         """
