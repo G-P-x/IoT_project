@@ -19,10 +19,8 @@ cfg = Config()
 
 CUSTOM_ERROR_CODE = 104 # code error to use when the request fails and we don't have a response object to get the status code from. 
 
-def _build_url(base_url):
-    """Build the notify endpoint URL for a given device base URL."""
-    return base_url.rstrip("/") + cfg.COMMAND_ENDPOINT
-
+def send_alarm():
+    pass
 
 def _send_http_command(url, command, field_devices):
     """
@@ -79,7 +77,7 @@ def _send_http_command(url, command, field_devices):
     # sending payload structure
     # {
     #  "command": "cmd_01",
-    #  "sensors": ["t1", "aq1"]
+    #  "sensors": ["t1", "aq1"],
     # } 
     payload = {"command": command, "sensors": field_devices}  # kept sensors as key for backwards compatibility, even if it's actually a list of field device IDs. 
     # The edge device will interpret the list of field device IDs as the target devices for the command. 

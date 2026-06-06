@@ -43,15 +43,6 @@ class Config:
     MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
     MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "etna_iot")
 
-    # # MQTT Broker (NOTE: this is the broker, not your python service)
-    # MQTT_BROKER = os.getenv("MQTT_BROKER", "localhost")
-    # MQTT_PORT = int(os.getenv("MQTT_PORT", "1883"))
-
-    # # MQTT Topics
-    # TOPIC_TELEMETRY = os.getenv("TOPIC_TELEMETRY","")
-    # TOPIC_HEALTH = os.getenv("TOPIC_HEALTH","")
-    # TOPIC_PUB = os.getenv("TOPIC_PUB","")
-
     # Twin identity
     DEFAULT_TWIN_ID = os.getenv("DEFAULT_TWIN_ID", "etna_01")
 

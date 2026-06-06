@@ -13,7 +13,7 @@ calls **`_poll_gateway()`** and it gets this from the single gateway:
 			"severity": "critical",
 			"value": null,
 			"message": "MPU-6050 connection lost",
-			"timestamp": "2026-02-16T15:40:12Z"
+			"timestamp": "2026-02-16T15:40:12Z",
 		}
 	},
 	{ 
@@ -26,6 +26,7 @@ calls **`_poll_gateway()`** and it gets this from the single gateway:
 			"value": 55.0 
 			"message": "read successful"
 			"timestamp": "2026-02-16T15:40:12Z"
+			"threshold": 21.0,
 		} 
 	}
 ]
@@ -52,7 +53,7 @@ result = {
 				"severity": "critical",
 				"value": null,
 				"message": "MPU-6050 connection lost",
-				"timestamp": "2026-02-16T15:40:12Z"
+				"timestamp": "2026-02-16T15:40:12Z",
 			}
 		},
 		{ 
@@ -65,6 +66,7 @@ result = {
 				"value": 55.0 
 				"message": "read successful"
 				"timestamp": "2026-02-16T15:40:12Z"
+				"threshold": 21.0,
 			} 
 		}
 	],
@@ -97,11 +99,12 @@ Now ***`_normalized_result(result)`*** takes the result and it creates a new dic
 		"sensore_2":
 		{
 			"type": "sensor"
-				"status": "OK"
-				"severity": "info"
-				"value": 55.0 
-				"message": "read successful"
-				"timestamp": "2026-02-16T15:40:12Z"
+			"status": "OK"
+			"severity": "info"
+			"value": 55.0 
+			"message": "read successful"
+			"timestamp": "2026-02-16T15:40:12Z"
+			"threshold": 21.0,
 		}
 	},
 }
@@ -131,12 +134,13 @@ results = {
 			}
 			"sensore_2":
 			{
-				"type": "sensor"
-					"status": "OK"
-					"severity": "info"
-					"value": 55.0 
-					"message": "read successful"
-					"timestamp": "2026-02-16T15:40:12Z"
+				"type": "sensor",
+				"status": "OK",
+				"severity": "info",
+				"value": 55.0,
+				"message": "read successful",
+				"timestamp": "2026-02-16T15:40:12Z",
+				"threshold": 21.0,
 			}
 		},
 	}
