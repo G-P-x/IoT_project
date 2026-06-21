@@ -1,0 +1,15 @@
+{
+  "gateway_ip": "192.168.1.100",
+  "mqtt_host": "localhost",
+  "mqtt_port": 1883,
+  "http_port": 8080,
+  "window_size": 200,
+  "cmd_timeout": 10.0,
+  "topic_auto": "iot/sensors",
+  "topic_cmd": "iot/sensors/cmd",
+  "topic_pub": "iot/cmd",
+  "wifi_ssid": "Mani Deïz",
+  "wifi_pass": "rybe4250",
+  "send_interval_ms": 5000,
+  "buzzer_duration_ms": 3000
+}
