@@ -125,10 +125,10 @@ class DTFactory:
                 {"_id": dt_id},
                 {
                     "$push": {
-                        "digital_replicas": {"type": dr_type, "id": dr_id}
+                        "digital_replicas": {"type": dr_type, "id": dr_id} # push the digital replica reference
                     },
                     "$set": {
-                        "metadata.updated_at": datetime.utcnow()
+                        "metadata.updated_at": datetime.utcnow() # update the digital twin's updated_at field
                     },
                 },
             )
