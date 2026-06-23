@@ -110,6 +110,7 @@ class FlaskServer:
         schema_registry.load_schema("gateway", "cloud_platform/virtualization/templates/gateway.yaml")
         schema_registry.load_schema("sensor", "cloud_platform/virtualization/templates/sensor.yaml")
         schema_registry.load_schema("actuator", "cloud_platform/virtualization/templates/actuator.yaml")
+        schema_registry.load_schema("digital_twin", "cloud_platform/virtualization/templates/digital_twin.yaml")
 
         # ── 2. Database Service ───────────────────────────────────────
         # Load MongoDB connection details from config/database.yaml
@@ -127,6 +128,7 @@ class FlaskServer:
         # The factory manages the lifecycle of DT documents in MongoDB and
         # can reconstitute live DigitalTwin objects on demand.
         dt_factory = DTFactory(db_service, schema_registry)
+        dt_factory.create_dt() # create the DT entry if it doesn't exist
 
         # ── 4. Store in app.config for Blueprint access ──────────────
         self.app.config["SCHEMA_REGISTRY"] = schema_registry
@@ -170,8 +172,9 @@ class FlaskServer:
 
 
 class GatewayPoller:
-    def __init__(self, db_service: DatabaseService, poll_interval_ms: int):
+    def __init__(self, db_service: DatabaseService, dt_factory: DTFactory, poll_interval_s: int):
         self.db_service = db_service
+        self.dt_factory = dt_factory
         self.poll_interval_s = 5 # max(poll_interval_ms, 1000) / 1000.0
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -188,7 +191,7 @@ class GatewayPoller:
         while not self._stop_event.is_set():
             try:
                 results = client_http.poll_gateways()
-                ingest_edge_results(self.db_service, results, submitter=None, command=None)
+                ingest_edge_results(self.db_service, results, self.dt_factory, submitter=None, command=None)
             except Exception as exc:
                 logger.exception("Gateway polling failed: %s", exc)
 
@@ -213,7 +216,8 @@ if __name__ == "__main__":
         cfg,
         telegram_application=telegram_bot.application if telegram_bot else None,
     )
-    poller = GatewayPoller(_get_db_service(server), cfg.POLLING_INTERVAL_MS)
+
+    poller = GatewayPoller(_get_db_service(server), server.app.config.get("DT_FACTORY"), cfg.POLLING_INTERVAL_MS)
     poller.start()
     try:
         server.run(

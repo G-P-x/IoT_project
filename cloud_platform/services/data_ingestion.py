@@ -40,7 +40,9 @@ from pydantic_core import ValidationError
 from cloud_platform.types.edge import DeviceResult, EdgeResults
 from cloud_platform.virtualization.digital_replica.dr_factory import DRFactory
 from cloud_platform.virtualization.digital_replica.history_factory import HistoryFactory
-from cloud_platform.services.database_service import DatabaseService # used just to check the input
+# used just to check the input
+from cloud_platform.services.database_service import DatabaseService 
+from cloud_platform.digital_twin.dt_factory import DTFactory
 
 logger = logging.getLogger(__name__)
 
@@ -68,9 +70,9 @@ def _infer_sensor_type(physical_sensor_id: str) -> str:
         "sensor_aq1" → "air_quality"
         "sensor_s1"  → "seismic_waves"
 
-    Falls back to "unknown" if the sensor ID is not recognised.
+    Falls back to "temperature" if the sensor ID is not recognised.
     """
-    return SENSOR_TYPE_MAP.get(physical_sensor_id, "unknown")
+    return SENSOR_TYPE_MAP.get(physical_sensor_id, "temperature")
 
 def _find_dr(db_service: DatabaseService, device_id: str) -> Optional[Dict]:
     """
@@ -102,18 +104,6 @@ def _link_sensor_to_gateway(db_service, gateway_id: str, sensor_dr_id: str) -> N
             })
     except Exception as e:
         logger.warning("Failed to link sensor %s to gateway %s: %s", sensor_dr_id, gateway_id, e)
-
-
-def _resolve_gateway_dr_id(db_service, device_id: str) -> Optional[str]:
-    """
-    Look up the gateway DR _id from the physical device_id.
-
-    Returns None if no gateway DR is registered for this device.
-    """
-    results = db_service.query_drs("gateway", {"profile.device_id": device_id})
-    if results:
-        return results[0]["_id"]
-    return None
 
 def _create_gateway_record(gateway_id: str, gateway_info: Dict, sub: str | None) -> dict:
     ''' 
@@ -207,7 +197,29 @@ def _create_gateway_dr_entry(gateway_id: str, gateway_info: Dict, sensors : List
 
 def _create_sensor_dr_entry(gateway_id: str, sensor_id: str, record: Dict) -> dict:
     # ── Auto-create ──────────────────────────────────────────────────
-    sensor_type = _infer_sensor_type(sensor_id)
+    # Prefer explicit type from the incoming record when available, map it
+    # to the canonical device_type values expected by the sensor schema.
+    RECORD_TYPE_MAP = {
+        "accelerometer": "seismic_waves",
+        "sensor": "temperature",
+        "temperature": "temperature",
+        "humidity": "humidity",
+        "gas": "gas",
+        "air_quality": "air_quality",
+    }
+
+    raw_type = None
+    if isinstance(record, dict):
+        raw_type = record.get("type") or record.get("device_type")
+    if isinstance(raw_type, str):
+        sensor_type = RECORD_TYPE_MAP.get(raw_type.lower(), None)
+    else:
+        sensor_type = None
+
+    # If we couldn't determine a type from the record, fall back to id-based inference
+    if not sensor_type:
+        sensor_type = _infer_sensor_type(sensor_id)
+
     unit = UNIT_MAP.get(sensor_type, "")
 
     initial_data = {
@@ -285,7 +297,7 @@ def _collect_latest_sensor_readings(records: Dict[str, Dict]) -> tuple[list[str]
 
     return sensors, latest
 
-def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, DeviceResult], submitter: str | None, command: str | None) -> Dict:
+def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, DeviceResult], dt_factory: DTFactory, submitter: str | None, command: str | None) -> Dict:
     """
     Process the full edge_results dict returned by send_command_to_all_devices() and poll_gateways()
     and persist every successful sensor reading into the corresponding DRs.
@@ -293,6 +305,7 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
     Args:
         db_service:   The DatabaseService instance (from current_app.config["DB_SERVICE"]).
         edge_results: Dict of gateway_id → DeviceResult as returned by the HTTP client after polling the gateways.
+        dt_factory:   The DTFactory instance (from current_app.config["DT_FACTORY"]). Used for the CRUD operations on the DTs.
         submitter:    The operator user ID if this ingestion is triggered by an operator command, else None if triggered by telemetry.
         command:        The command string if this ingestion is triggered by an operator command, else None.
 
@@ -339,6 +352,8 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
                                             "status": "inactive"},
                             })
             
+            # phase 3: update digital twin: add digital replica (gateway) in the DT 
+            dt_factory.add_digital_replicas(dt_factory.dt_id, [{"type": "gateway", "id": dr_entry["_id"]}])
             continue
         
         # ----- Second case: gateway-level success -----
@@ -346,7 +361,7 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
         db_service.save_history_event(history_entry)
         sensors = []
         actuators = []
-        
+        digital_replicas = []
         
         for device_id, device_data in gtw_data.get("records", {}).items():
 
@@ -372,13 +387,14 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
                         "status": "active" if device_data.get("status") == "OK" else "inactive",
                     },
                 })
-
+                
             elif device_data.get("type") == "actuator":
+                # Phase 1: create a history record for the actuator with status "active" or "inactive" based on the record status and source "operator" or "telemetry" based on the submitter
                 history_entry = _create_actuator_record(gateway_id, device_id, device_data, sub=submitter, command=command)
                 db_service.save_history_event(history_entry)
                 actuators.append(device_id)
 
-                # Update the digital replica of the actuator
+                # Phase 2: find or create the actuator DR and link it to the gateway DR (if not already linked)
                 dr_entry = _find_dr(db_service, device_id)
                 if dr_entry:
                     db_service.update_dr("actuator", dr_entry["_id"], {
@@ -391,12 +407,17 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
                             "last_update": device_data.get("timestamp", datetime.now(timezone.utc).isoformat()),
                         },
                     })
+            else:
+                logger.warning("Unknown device type '%s' for device '%s' in gateway '%s'", device_data.get("type"), device_id, gateway_id)
+                continue
+            
+            digital_replicas.append({"type": dr_entry.get("profile", {}).get("device_type"), "id": dr_entry["_id"]}) # collect all digital replicas (sensors and actuators) to be added to the DT at the end of the loop
 
         # Update the gateway DR with the new sensors/actuators and status, keeping existing ones
         gateway_dr = _find_dr(db_service, gateway_id)
         if gateway_dr:
-            existing_sensors = gateway_dr.get("data", {}).get("sensors", [])
-            existing_actuators = gateway_dr.get("data", {}).get("actuators", [])
+            existing_sensors = gateway_dr.get("data", {}).get("sensors", []) # get the existing sensors list from the gateway DR
+            existing_actuators = gateway_dr.get("data", {}).get("actuators", []) # get the existing actuators list from the gateway DR
             
             for s in sensors:
                 if s not in existing_sensors:
@@ -417,5 +438,9 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
                 }
             })
         else:
-            dr_entry = _create_gateway_dr_entry(gateway_id, gtw_data.get("gateway_info", {}), sensors=sensors, actuators=actuators)
-            db_service.add_dr(dr_entry)
+            gateway_dr = _create_gateway_dr_entry(gateway_id, gtw_data.get("gateway_info", {}), sensors=sensors, actuators=actuators)
+            db_service.add_dr(gateway_dr)
+        digital_replicas.append({"type": gateway_dr.get("dr_type"), "id": gateway_dr["_id"]})
+        
+        # Finally, update the digital twin with the gateway DR reference
+        dt_factory.add_digital_replicas(dt_factory.dt_id, digital_replicas)
