@@ -4,43 +4,41 @@ import json
 
 
 class Config:
-    load_dotenv()  # Load environment variables from .env file if it exists
+    load_dotenv()
+
     # Flask
-    FLASK_HOST = os.getenv("FLASK_HOST")
-    FLASK_PORT = int(os.getenv("FLASK_PORT"))
+    FLASK_HOST  = os.getenv("FLASK_HOST")
+    FLASK_PORT  = int(os.getenv("FLASK_PORT"))
     FLASK_DEBUG = os.getenv("FLASK_DEBUG", "False").lower() == "true"
 
-    # Server HTTP  for researcher clients
+    # Server HTTP for researcher clients
     HTTP_ENDPOINT_HOST = os.getenv("HTTP_ENDPOINT_HOST", "0.0.0.0")
     HTTP_ENDPOINT_PORT = int(os.getenv("HTTP_ENDPOINT_PORT", "5000"))
 
-    ### ---------- Edge devices ----------
+    # ---------- Edge devices ----------
+    # Chiave: MAC address del nodo ESP8266 (corrisponde al nodeID() del firmware).
+    # Valore: URL base del gateway — gli endpoint /data e /command vengono
+    #         appesi automaticamente da client_http.py tramite POLL_ENDPOINT
+    #         e COMMAND_ENDPOINT.
+    # Aggiorna l'IP se la rete cambia (DHCP).
     EDGE_DEVICES = {
-        "gateway_01": "http://127.0.0.1:5050/gtw_01",
-        "gateway_02": "http://127.0.0.1:5050/gtw_02",
+        "A4CF12F5A331": "http://10.98.201.225:8080",
     }
-    # try:
-    #     EDGE_DEVICES = json.loads(EDGE_DEVICES_RAW)
-    # except json.JSONDecodeError:
-    #     print(f"Error parsing EDGE_DEVICES: {EDGE_DEVICES_RAW}. Expected JSON format.")
-    #     EDGE_DEVICES = {}
 
-    POLL_ENDPOINT = os.getenv("POLL_ENDPOINT", "/data")
+    POLL_ENDPOINT    = os.getenv("POLL_ENDPOINT",    "/data")
+    COMMAND_ENDPOINT = os.getenv("COMMAND_ENDPOINT", "/command")
+
     # HTTP Polling interval (ms)
     POLLING_INTERVAL_MS = int(os.getenv("POLLING_INTERVAL_MS", "5000"))
 
-    COMMAND_ENDPOINT = os.getenv("COMMAND_ENDPOINT", "/command")
-
-    ### ---------- Telegram Bot ----------
-
-    # Telegram Bot (optional, for notifications)
+    # ---------- Telegram Bot ----------
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_TOKEN", "")
-    TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
-    NGROK_AUTH_TOKEN = os.getenv("NGROK_AUTH_TOKEN", "")
-    WEBHOOK_PATH = "/telegram"
-    
-    ### ---------- MongoDB ----------
-    MONGO_URI = os.getenv("MONGO_URI", "mongodb://localhost:27017")
+    TELEGRAM_CHAT_ID   = os.getenv("TELEGRAM_CHAT_ID", "")
+    NGROK_AUTH_TOKEN   = os.getenv("NGROK_AUTH_TOKEN", "")
+    WEBHOOK_PATH       = "/telegram"
+
+    # ---------- MongoDB ----------
+    MONGO_URI     = os.getenv("MONGO_URI",     "mongodb://localhost:27017")
     MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "etna_iot")
 
     # Twin identity
@@ -48,9 +46,9 @@ class Config:
 
     # Directories
     TEMPLATES_DIR = os.getenv("TEMPLATES_DIR", "templates")
-    STATIC_DIR = os.getenv("STATIC_DIR", "static")
+    STATIC_DIR    = os.getenv("STATIC_DIR",    "static")
 
-    # commands
+    # Commands
     COMMANDS = {
         "cmd_01": "sensor_reading_event",
         "cmd_02": "display_message",
