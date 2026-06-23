@@ -37,6 +37,10 @@ schemas:
         enum: ["OK", "OFFLINE", "MAINTENANCE", "WARNING", "CRITICAL"]
 
     initialization:
+      root:
+        name: "etna"
+        description: "default"
+        services: []
+        digital_replicas: []
       metadata:
         status: "OK"
-      digital_replicas: []
