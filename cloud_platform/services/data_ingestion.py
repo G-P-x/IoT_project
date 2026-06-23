@@ -330,13 +330,13 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
     for gateway_id, gtw_data in edge_results.items(): # gateway_id, data: DeviceResult
         assert isinstance(gtw_data, dict), f"Expected dict for device result, got {type(gtw_data)}"
 
+        # phase 1: create a history record for the gateway with status "inactive" and source "operator" or "telemetry" based on the submitter
+        history_entry = _create_gateway_record(gateway_id, gtw_data.get("gateway_info", {}), sub = submitter) # create a history record for the gateway, both in case of success and failure
+        db_service.save_history_event(history_entry)
+
         # ----- First case: gateway-level failure (e.g. no response) -----
         if gtw_data.get("gateway_info", {}).get("status") != "success":
             
-            # phase 1: create a history record for the gateway with status "inactive" and source "operator" or "telemetry" based on the submitter
-            history_entry = _create_gateway_record(gateway_id, gtw_data.get("gateway_info", {}), sub = submitter) # create a history record for the gateway
-            db_service.save_history_event(history_entry)
-
             # phase 2: find or create the gateway DR and set its status to "inactive" (if it already exists, just update the status and last_update timestamp, if it doesn't exist, create it with the status "inactive" and no sensors/actuators)
             dr_entry = _find_dr(db_service, gateway_id) # find an existing gateway DR by device_id (by default it searches in the "device" collection)
 
@@ -357,8 +357,7 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
             continue
         
         # ----- Second case: gateway-level success -----
-        history_entry = _create_gateway_record(gateway_id, gtw_data.get("gateway_info", {}), sub = submitter)
-        db_service.save_history_event(history_entry)
+
         sensors = []
         actuators = []
         digital_replicas = []
@@ -367,6 +366,7 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
 
             # create a history entry and DR entry for the sensor record
             if device_data.get("type") == "sensor":
+
                 # Phase 1: create a history record for the sensor with status "active" or "inactive" based on the record status and source "operator" or "telemetry" based on the submitter
                 history_entry = _create_sensor_record(gateway_id, device_id, device_data, sub = submitter)
                 db_service.save_history_event(history_entry)
@@ -381,6 +381,7 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
                 db_service.update_dr("sensor", dr_entry["_id"], {
                     "data": {
                         "value": device_data.get("value"),
+                        "threshold": device_data.get("threshold"),
                     },
                     "metadata": {
                         "last_update": device_data.get("timestamp", datetime.now(timezone.utc).isoformat()),

@@ -176,6 +176,7 @@ def _normalize_result(result):
                 "value": sensor value (if success),
                 "message": message from the gateway,
                 "timestamp": timestamp of the record at the sensor/actuator level
+                "threshold": threshold value
             },
             ...
         }
@@ -198,6 +199,7 @@ def _normalize_result(result):
                     "value": rec.get("value"),
                     "message": rec.get("message"),
                     "timestamp": rec.get("timestamp"),
+                    "threshold": rec.get("threshold"),
                 }
             return records
 
