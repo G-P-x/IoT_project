@@ -59,7 +59,7 @@ schemas:
         type: str
       device_type:
         type: str
-        enum: ["temperature", "air_quality", "seismic_waves", "humidity", "gas"]
+        enum: ["t1", "t2", "t3", "aq1", "aq2", "s1", ]
       unit:
         type: str
       description:

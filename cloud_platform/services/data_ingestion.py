@@ -75,18 +75,6 @@ def _infer_sensor_type(physical_sensor_id: str) -> str:
     """
     return SENSOR_TYPE_MAP.get(physical_sensor_id, "temperature")
 
-def _get_sensor_unit(sensor_type: str) -> str:
-    """
-    Get the measurement unit for a given sensor type.
-
-    Args:
-        sensor_type: The type of the sensor (e.g., "t1", "aq1", "sw1" ....).
-
-    Returns:
-        The corresponding measurement unit as a string.
-    """
-    return UNIT_MAP.get(sensor_type, "")
-
 def _find_dr(db_service: DatabaseService, device_id: str) -> Optional[Dict]:
     """
     Look up the gateway DR by the physical device_id.
@@ -217,103 +205,29 @@ def _create_sensor_dr_entry(gateway_id: str, sensor_id: str, record: Dict) -> di
     # ── Auto-create ──────────────────────────────────────────────────
     # Prefer explicit type from the incoming record when available, map it
     # to the canonical device_type values expected by the sensor schema.
-    RECORD_TYPE_MAP = {
-        "accelerometer": "seismic_waves",
-        "sensor": "temperature",
-        "temperature": "temperature",
-        "humidity": "humidity",
-        "gas": "gas",
-        "air_quality": "air_quality",
+    DEFAULT_DESCRIPTION = {
+        "t1": "ground temperature sensor",
+        "t2": "fumarole temperature sensor",
+        "t3": "magmatic chamber temperature sensor",
+        "aq1": "CO2 concentration sensor",
+        "aq2": "SO2 concentration sensor",
+        "s1": "seismic waves sensor",
     }
-
-    raw_type = None
-    if isinstance(record, dict):
-        raw_type = record.get("type") or record.get("device_type")
-    if isinstance(raw_type, str):
-        sensor_type = RECORD_TYPE_MAP.get(raw_type.lower(), None)
-    else:
-        sensor_type = None
-
-    # If we couldn't determine a type from the record, fall back to id-based inference
-    if not sensor_type:
-        sensor_type = _infer_sensor_type(sensor_id)
-
-    unit = UNIT_MAP.get(sensor_type, "")
-
+    
+    temp = sensor_id.split("-")[1] if "-" in sensor_id else "NOT_SPECIFIED"  # e.g., "t1" or "aq1" from "sensor_t1"
     initial_data = {
         "profile": {
             "device_id": sensor_id,
-            "device_type": sensor_type,
-            "unit": unit,
-            "description": f"Auto-created from gateway '{gateway_id}' response",
+            "device_type": temp,
+            "unit": UNIT_MAP.get(temp, "NOT_SPECIFIED"),
+            "description": DEFAULT_DESCRIPTION.get(temp, "NOT_SPECIFIED"),
             "gateway_id": gateway_id or "",
         },
     }
 
     dr_factory = DRFactory("cloud_platform/virtualization/templates/sensor.yaml")
     sensor_dr = dr_factory.create_dr("sensor", initial_data)
-
-    logger.info(
-        "Auto-created sensor DR entry (type=%s) for gateway '%s'",
-        sensor_type, gateway_id,
-    )
     return sensor_dr
-
-def  _parse_record_timestamp(value: str | None) -> Optional[datetime]:
-    if isinstance(value, datetime):
-        return value
-    if not value or not isinstance(value, str):
-        return None
-    try:
-        if value.endswith("Z"):
-            value = value[:-1] + "+00:00"
-        return datetime.fromisoformat(value)
-    except ValueError:
-        return None
-
-def _collect_latest_sensor_readings(records: Dict[str, Dict]) -> tuple[list[str], Dict[str, Dict]]:
-    """
-    Extract unique sensor IDs and their most recent readings.
-
-    Returns:
-        sensors: list of unique sensor IDs (first-seen order)
-        latest: mapping of sensor ID -> latest record by timestamp
-    """
-    sensors: list[str] = []
-    seen: set[str] = set()
-    latest: Dict[str, Dict] = {}
-    latest_ts: Dict[str, Optional[datetime]] = {}
-
-    for device_id, record in (records or {}).items():
-        if not isinstance(record, dict):
-            continue
-        if record.get("type") != "sensor":
-            continue
-
-        if device_id not in seen:
-            seen.add(device_id)
-            sensors.append(device_id)
-
-        # Keep the record with the most recent timestamp; prefer any parseable timestamp.
-        current_ts = _parse_record_timestamp(record.get("timestamp"))
-        prev_ts = latest_ts.get(device_id)
-
-        if device_id not in latest:
-            latest[device_id] = record
-            latest_ts[device_id] = current_ts
-            continue
-
-        if prev_ts is None:
-            if current_ts is not None:
-                latest[device_id] = record
-                latest_ts[device_id] = current_ts
-            continue
-
-        if current_ts is not None and current_ts > prev_ts:
-            latest[device_id] = record
-            latest_ts[device_id] = current_ts
-
-    return sensors, latest
 
 def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, DeviceResult], dt_factory: DTFactory, submitter: str | None, command: str | None) -> Dict:
     """
