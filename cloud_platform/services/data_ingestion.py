@@ -48,11 +48,12 @@ logger = logging.getLogger(__name__)
 
 # Measurement units per sensor type
 UNIT_MAP = {
-    "temperature":   "°C",
-    "air_quality":   "AQI",
-    "seismic_waves": "mm/s",
-    "humidity":      "%",
-    "gas":           "ppm",
+    "t1": "°C", 
+    "t2": "°C",
+    "t3": "°C",
+    "aq1": "ppm", # for C02
+    "aq2": "ppb", # for SO2
+    "s1": "m/s",
 }
 
 SENSOR_TYPE_MAP = {"sensor_t1": "temperature", 
@@ -73,6 +74,18 @@ def _infer_sensor_type(physical_sensor_id: str) -> str:
     Falls back to "temperature" if the sensor ID is not recognised.
     """
     return SENSOR_TYPE_MAP.get(physical_sensor_id, "temperature")
+
+def _get_sensor_unit(sensor_type: str) -> str:
+    """
+    Get the measurement unit for a given sensor type.
+
+    Args:
+        sensor_type: The type of the sensor (e.g., "t1", "aq1", "sw1" ....).
+
+    Returns:
+        The corresponding measurement unit as a string.
+    """
+    return UNIT_MAP.get(sensor_type, "")
 
 def _find_dr(db_service: DatabaseService, device_id: str) -> Optional[Dict]:
     """
@@ -132,12 +145,17 @@ def _create_gateway_record(gateway_id: str, gateway_info: Dict, sub: str | None)
 
 def _create_sensor_record(gateway_id: str, sensor_id: str, record: Dict, sub: str | None) -> dict: 
     history_factory = HistoryFactory("cloud_platform/virtualization/templates/sensor_history.yaml")
+    temp = sensor_id.split("-")[1]  # e.g., "t1" or "aq1" from "sensor_t1"
     history_entry = history_factory.create_record({
+        "record_type": temp,  # e.g., "t1" or "aq1" from "sensor_t1"
         "device_id": sensor_id,
+        "unit": UNIT_MAP.get(temp),  # e.g., "°C" for "t1"
         "gateway_id": gateway_id,
         "timestamp": record.get("timestamp", datetime.now(timezone.utc).isoformat()),
+        
         "data": {
             "value": record.get("value"),
+            "threshold": record.get("threshold"),
             "status": "active" if record.get("status") == "OK" else "inactive",            
             "source": "operator" if sub else "telemetry",
             "operator_id": sub if sub else None,
@@ -318,25 +336,24 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
             "details":  [ ... ],    # per-record detail
         }
     """
-
     try:
         # validate edge_results structure with Pydantic, technically it is already validated in the client_http before returning the response.
         EdgeResults(edge=edge_results)
 
     except ValidationError as ve:
-        print("Validation error in edge_results:", ve)
+        logger.error("Validation error in edge_results: %s", ve)
         return {}
 
     for gateway_id, gtw_data in edge_results.items(): # gateway_id, data: DeviceResult
         assert isinstance(gtw_data, dict), f"Expected dict for device result, got {type(gtw_data)}"
-
+        logger.info("Ingesting edge results from submitter '%s' with command '%s'", submitter, command)
         # phase 1: create a history record for the gateway with status "inactive" and source "operator" or "telemetry" based on the submitter
         history_entry = _create_gateway_record(gateway_id, gtw_data.get("gateway_info", {}), sub = submitter) # create a history record for the gateway, both in case of success and failure
         db_service.save_history_event(history_entry)
 
         # ----- First case: gateway-level failure (e.g. no response) -----
         if gtw_data.get("gateway_info", {}).get("status") != "success":
-            
+            logger.info("Processing gateway-level failure for device '%s'", gateway_id)
             # phase 2: find or create the gateway DR and set its status to "inactive" (if it already exists, just update the status and last_update timestamp, if it doesn't exist, create it with the status "inactive" and no sensors/actuators)
             dr_entry = _find_dr(db_service, gateway_id) # find an existing gateway DR by device_id (by default it searches in the "device" collection)
 
@@ -357,59 +374,66 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
             continue
         
         # ----- Second case: gateway-level success -----
-
+        logger.info("Processing gateway-level success for device '%s'", gateway_id)
+        logger.info("Edge results: %s", gtw_data)
         sensors = []
         actuators = []
         digital_replicas = []
         
         for device_id, device_data in gtw_data.get("records", {}).items():
+            try:
+                logger.info("Processing device '%s' in gateway '%s'", device_id, gateway_id)
+                device_data = dict(device_data)  # Ensure device_data is a dict
+                # create a history entry and DR entry for the sensor record
+                if device_data.get("type") == "sensor":
 
-            # create a history entry and DR entry for the sensor record
-            if device_data.get("type") == "sensor":
+                    # Phase 1: create a history record for the sensor with status "active" or "inactive" based on the record status and source "operator" or "telemetry" based on the submitter
+                    history_entry = _create_sensor_record(gateway_id, device_id, device_data, sub = submitter)
+                    db_service.save_history_event(history_entry)
+                    sensors.append(device_id)
 
-                # Phase 1: create a history record for the sensor with status "active" or "inactive" based on the record status and source "operator" or "telemetry" based on the submitter
-                history_entry = _create_sensor_record(gateway_id, device_id, device_data, sub = submitter)
-                db_service.save_history_event(history_entry)
-                sensors.append(device_id)
-
-                # Phase 2: find or create the sensor DR and link it to the gateway DR (if not already linked)
-                dr_entry = _find_dr(db_service, device_id) # find an existing sensor DR by physical sensor_id
-                if not dr_entry: # if no sensor DR exists, create one
-                    dr_entry = _create_sensor_dr_entry(gateway_id, device_id, device_data) # create the sensor DR dictionary using sensor.yaml template
-                    dr_entry = db_service.add_dr(dr_entry) # and insert in the collection
-                
-                db_service.update_dr("sensor", dr_entry["_id"], {
-                    "data": {
-                        "value": device_data.get("value"),
-                        "threshold": device_data.get("threshold"),
-                    },
-                    "metadata": {
-                        "last_update": device_data.get("timestamp", datetime.now(timezone.utc).isoformat()),
-                        "status": "active" if device_data.get("status") == "OK" else "inactive",
-                    },
-                })
-                
-            elif device_data.get("type") == "actuator":
-                # Phase 1: create a history record for the actuator with status "active" or "inactive" based on the record status and source "operator" or "telemetry" based on the submitter
-                history_entry = _create_actuator_record(gateway_id, device_id, device_data, sub=submitter, command=command)
-                db_service.save_history_event(history_entry)
-                actuators.append(device_id)
-
-                # Phase 2: find or create the actuator DR and link it to the gateway DR (if not already linked)
-                dr_entry = _find_dr(db_service, device_id)
-                if dr_entry:
-                    db_service.update_dr("actuator", dr_entry["_id"], {
+                    # Phase 2: find or create the sensor DR and link it to the gateway DR (if not already linked)
+                    dr_entry = _find_dr(db_service, device_id) # find an existing sensor DR by physical sensor_id
+                    if not dr_entry: # if no sensor DR exists, create one
+                        dr_entry = _create_sensor_dr_entry(gateway_id, device_id, device_data) # create the sensor DR dictionary using sensor.yaml template
+                        dr_entry = db_service.add_dr(dr_entry) # and insert in the collection
+                    
+                    db_service.update_dr("sensor", dr_entry["_id"], {
                         "data": {
-                            "status": device_data.get("status"),
-                            "command": command,
-                            "timestamp": device_data.get("timestamp"),
+                            "value": device_data.get("value"),
+                            "threshold": device_data.get("threshold"),
                         },
                         "metadata": {
                             "last_update": device_data.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                            "status": "active" if device_data.get("status") == "OK" else "inactive",
                         },
                     })
-            else:
-                logger.warning("Unknown device type '%s' for device '%s' in gateway '%s'", device_data.get("type"), device_id, gateway_id)
+                    
+                elif device_data.get("type") == "actuator":
+                    # Phase 1: create a history record for the actuator with status "active" or "inactive" based on the record status and source "operator" or "telemetry" based on the submitter
+                    history_entry = _create_actuator_record(gateway_id, device_id, device_data, sub=submitter, command=command)
+                    db_service.save_history_event(history_entry)
+                    actuators.append(device_id)
+
+                    # Phase 2: find or create the actuator DR and link it to the gateway DR (if not already linked)
+                    dr_entry = _find_dr(db_service, device_id)
+                    if dr_entry:
+                        db_service.update_dr("actuator", dr_entry["_id"], {
+                            "data": {
+                                "status": device_data.get("status"),
+                                "command": command,
+                                "timestamp": device_data.get("timestamp"),
+                            },
+                            "metadata": {
+                                "last_update": device_data.get("timestamp", datetime.now(timezone.utc).isoformat()),
+                            },
+                        })
+                else:
+                    logger.warning("Unknown device type '%s' for device '%s' in gateway '%s'", device_data.get("type"), device_id, gateway_id)
+                    continue
+
+            except Exception as e:
+                logger.error("Error processing device '%s' in gateway '%s': %s", device_id, gateway_id, e)
                 continue
             
             digital_replicas.append({"type": dr_entry.get("profile", {}).get("device_type"), "id": dr_entry["_id"]}) # collect all digital replicas (sensors and actuators) to be added to the DT at the end of the loop

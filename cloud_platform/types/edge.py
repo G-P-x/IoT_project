@@ -17,6 +17,7 @@ class FieldDeviceResult(BaseModel):
     value: float | None          # present if status is OK
     message: str                # "reading acquired" or "invalid sensor_id", etc.
     timestamp: str              # ISO datetime string of when the reading was taken
+    threshold: float | None = None        # present if status is OK and threshold is defined
 
 class DeviceResult(BaseModel):
     gateway_info: GatewayInfo

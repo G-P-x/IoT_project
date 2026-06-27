@@ -31,11 +31,31 @@ class TelegramBot:
         self._setup_handlers()
         self._setup_ngrok()
 
+    def _telegram_loop_exception_handler(self, loop, context):
+        exception = context.get("exception")
+        message = context.get("message")
+        if exception is not None:
+            logger.error(
+                "Unhandled exception in Telegram event loop: %s",
+                message,
+                exc_info=(type(exception), exception, exception.__traceback__),
+            )
+        else:
+            logger.error("Unhandled exception in Telegram event loop: %s", message)
+
     def _create_persistent_event_loop(self):
         loop = asyncio.new_event_loop()
+        loop.set_exception_handler(self._telegram_loop_exception_handler)
+
         def _run_loop_forever(loop):
             asyncio.set_event_loop(loop)
-            loop.run_forever()
+            try:
+                loop.run_forever()
+            except Exception:
+                logger.exception("Telegram background event loop crashed")
+            finally:
+                loop.close()
+
         loop_thread = threading.Thread(target=_run_loop_forever, args=(loop,), daemon=True)
         loop_thread.start()
         return loop, loop_thread
@@ -177,7 +197,17 @@ class GatewayPoller:
         self.dt_factory = dt_factory
         self.poll_interval_s = 5 # max(poll_interval_ms, 1000) / 1000.0
         self._stop_event = threading.Event()
-        self._thread = threading.Thread(target=self._run, daemon=True)
+        self._exception = None
+        self._thread = threading.Thread(target=self._run_thread, daemon=True)
+
+    def _run_thread(self) -> None:
+        try:
+            self._run()
+        except Exception as exc:
+            self._exception = exc
+            logger.exception("Unhandled exception in GatewayPoller thread")
+        finally:
+            self._stop_event.set()
 
     def start(self) -> None:
         self._thread.start()
@@ -191,6 +221,7 @@ class GatewayPoller:
         while not self._stop_event.is_set():
             try:
                 results = client_http.poll_gateways()
+                # logger.info("\n\nGateway polling results: %s\n\n", results)
                 ingest_edge_results(self.db_service, results, self.dt_factory, submitter=None, command=None)
             except Exception as exc:
                 logger.exception("Gateway polling failed: %s", exc)
@@ -205,6 +236,8 @@ def _get_db_service(server: FlaskServer) -> DatabaseService:
     return db_service
 
 if __name__ == "__main__":
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
+    logging.getLogger().setLevel(logging.INFO)
     cfg = Config()
     telegram_bot = None
     if cfg.TELEGRAM_BOT_TOKEN:
@@ -223,7 +256,7 @@ if __name__ == "__main__":
         server.run(
             host=cfg.FLASK_HOST,
             port=cfg.FLASK_PORT,
-            debug=cfg.FLASK_DEBUG,
+            debug=False,
             application=telegram_bot.application if telegram_bot else None,
         )
     finally:
