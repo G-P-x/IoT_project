@@ -119,3 +119,69 @@ The Database Service abstracts MongoDB and utilizes the `SchemaRegistry` to rout
 > [!TIP]
 > **Why this architecture is powerful:**
 > Because both telemetry polling and active commands funnel into the exact same normalization logic, any new features, machine-learning models, or databases added to `data_ingestion.py` will automatically benefit both data collection methods without duplicating code.
+
+
+
+```mermaid
+flowchart TD
+    subgraph Edge Communication
+        A((Trigger)) -->|Invokes| B(poll_gateways)
+        B -->|HTTP GET| C[Edge Gateways]
+        C -->|Returns JSON| D[edge_results Payload]
+    end
+
+    subgraph Data Ingestion Service
+        D --> E(ingest_edge_results)
+        E -->|Validates| F{Pydantic EdgeResults}
+        
+        F --> G{For each Gateway}
+        
+        %% Gateway Failure Path
+        G -->|Failure / Timeout| H[Save 'inactive' Gateway History]
+        H --> I[Update Gateway DR as 'inactive']
+        I --> Y
+        
+        %% Gateway Success Path
+        G -->|Success| J[Save 'active' Gateway History]
+        J --> K{For each Device}
+        
+        %% Sensor Path
+        K -->|Is Sensor| L[Save Sensor History]
+        L --> M{Find Sensor DR}
+        M -->|Not Found| N[Auto-Create Sensor DR]
+        M -->|Found| O[Update Sensor DR value/status]
+        N --> O
+        
+        %% Actuator Path
+        K -->|Is Actuator| P[Save Actuator History]
+        P --> Q{Find Actuator DR}
+        Q -->|Not Found| R[Auto-Create Actuator DR]
+        Q -->|Found| S[Update Actuator DR state/command]
+        R --> S
+        
+        %% Device Loop
+        O --> T((Next Device))
+        S --> T
+        T --> K
+        
+        %% Gateway DR Linking
+        K -->|All Devices Processed| U[Append new sensors/actuators to Gateway DR]
+    end
+
+    subgraph DB & Digital Twin Orchestration
+        U --> V(dt_factory.add_digital_replicas)
+        V --> W[(MongoDB & Active Twin Context)]
+        
+        %% Gateway Loop
+        W --> Y((Next Gateway))
+        Y --> G
+    end
+    
+    G -->|All Gateways Processed| Z([End Data Flow])
+
+    %% Styling
+    classDef service fill:#f9f,stroke:#333,stroke-width:2px;
+    classDef db fill:#bbf,stroke:#333,stroke-width:2px;
+    class E,V service;
+    class W db;
+```
