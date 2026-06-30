@@ -110,6 +110,7 @@ def _create_sensor_record(gateway_id: str, sensor_id: str, record: Dict, sub: st
             "status": "active" if record.get("status") == "OK" else "inactive",            
             "source": "operator" if sub else "telemetry",
             "operator_id": sub if sub else None,
+            "alert_level": set_alert_level(record.get("value"), record.get("threshold"))
         },
     })
     return history_entry
@@ -191,6 +192,26 @@ def _create_sensor_dr_entry(gateway_id: str, sensor_id: str, record: Dict) -> di
     dr_factory = DRFactory("cloud_platform/virtualization/templates/sensor.yaml")
     sensor_dr = dr_factory.create_dr("sensor", initial_data)
     return sensor_dr
+
+def set_alert_level(value: float, threshold: float) -> str:
+    """
+    Determine the alert level based on the sensor value and threshold.
+
+    Args:
+        value: The current sensor reading.
+        threshold: The threshold value for triggering alerts.
+
+    Returns:
+        The alert level ("normal", "warning", or "critical").
+    """
+    if value is None or threshold is None:
+        return None
+    if value > threshold:
+        return "critical"
+    elif value == threshold:
+        return "warning"
+    else:
+        return "normal"
 
 def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, DeviceResult], dt_factory: DTFactory, submitter: str | None, command: str | None) -> Dict:
     """
@@ -274,7 +295,7 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
                     if not dr_entry: # if no sensor DR exists, create one
                         dr_entry = _create_sensor_dr_entry(gateway_id, device_id, device_data) # create the sensor DR dictionary using sensor.yaml template
                         dr_entry = db_service.add_dr(dr_entry) # and insert in the collection
-                    
+
                     db_service.update_dr("sensor", dr_entry["_id"], {
                         "data": {
                             "value": device_data.get("value"),
@@ -283,6 +304,7 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
                         "metadata": {
                             "last_update": device_data.get("timestamp", datetime.now(timezone.utc).isoformat()),
                             "status": "active" if device_data.get("status") == "OK" else "inactive",
+                            "alert_level": set_alert_level(device_data.get("value"), device_data.get("threshold"))
                         },
                     })
                     

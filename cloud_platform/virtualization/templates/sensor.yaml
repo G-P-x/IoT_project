@@ -26,6 +26,7 @@ schemas:
       created_at: datetime          # ISO timestamp of when this DR was created
       last_update: datetime          # ISO timestamp of the latest reading
       status: str                   # Sensor operational status
+      alert_level: str               # Optional alert level (e.g. "normal", "warning", "critical")
       
 
   entity:
@@ -77,6 +78,9 @@ schemas:
         type: float | None
       threshold:
         type: float | None
+      alert_level:
+        type: str
+        enum: ["normal", "warning", "critical", None]
 
     initialization:
       root:

@@ -26,6 +26,7 @@ schemas:
       source: str                   # Origin of the reading (monitor, operator, recovery)
       status: str                   # Status of the sensor at the time of reading (e.g., "active", "inactive")
       operator_id: str | None       # If source is "operator", the ID of the operator who triggered the reading, else None
+      alert_level: str | None       # Optional alert level (e.g. "normal", "warning", "critical")
 
   validations:
     mandatory_fields:
@@ -63,6 +64,9 @@ schemas:
         enum: ["telemetry", "operator"]
       operator_id:
         type: str | None
+      alert_level:
+        type: str | None
+        enum: ["normal", "warning", "critical", None]
 
     initialization:
       root:
