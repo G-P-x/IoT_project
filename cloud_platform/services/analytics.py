@@ -102,7 +102,7 @@ class MonitorService(BaseService):
     """
     Service for monitoring measurements across Digital Replicas.
 
-    This service receives the DR data and decides, based on the thresholds defined for each attribute, whether to activate the heuristic to detect anomalies.
+    This service receives the DR data and decides, based on the thresholds defined for each device_type, whether to trigger alerts or not.
     """
     @staticmethod
     def _is_monotonic_increasing(values: List[float]) -> bool:
@@ -122,7 +122,7 @@ class MonitorService(BaseService):
         self,
         data: Dict,
         dr_type: str = 'sensor',
-        attribute: str | None = None,
+        device_type: str | None = None,
         db_service: Optional[DatabaseService] = None,
         history_limit: int = 20,
     ) -> Dict:

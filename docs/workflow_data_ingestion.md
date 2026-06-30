@@ -8,35 +8,84 @@ Both operations rely on edge gateway communication, but they conceptually merge 
 
 ## 1. High-Level Flow Diagram
 
-```mermaid
-flowchart TD
-    %% Triggers
-    Timer([Timer Loop]) -->|Triggers| Poll(poll_gateways)
-    Operator([Operator API]) -->|Triggers| SendCmd(send_command_to_sensors)
+```mermaid  
+flowchart TD  
+%% Application Entry Point
+	subgraph "Application Entry Point"  
+		App{{app.py}}  
+		Server([Flask])
+		Poll[GatewayPoller]
+		API{{OperatorAPI}}
+		
+		App -->|Run| Server 
+		Server --> |Listen for HTTP requests| API
+		App -.->|Starts background thread| Poll  
+		Poll -->|Loop every *n* seconds| Poll
+		
+	end 
+	
+%% OPERATOR_API MODULE
+	subgraph "operator_api.py"
+		CMD_SEND[CommandDispatcher]
+		SensSend[[send_command]]
+		S[[POST /command/send]]
+		cmdHTTP[[_send_command_to_*]]
+		
+		API --> S --> CMD_SEND --> SensSend --> cmdHTTP --> S
+	end
+	
+%% CLIENT_HTTP MODULE
+	subgraph "client_http.py (Edge Communication)"  
+		HTTP_GET[[poll_gateway]]  
+		HTTP_POST[[send_command_to*]]
+		N[[normalize_result]]
+		  
+		Poll --> HTTP_GET  
+		cmdHTTP --> HTTP_POST  
+		HTTP_GET --> N --> HTTP_GET --> |Returns standardized dict| Poll 
+		HTTP_POST --> N --> HTTP_POST -->|Returns standardized dict| cmdHTTP
+	end    
+	  
+	subgraph "data_ingestion.py (Data Processing)"
+		Ingest[[ingest_edge_results]]
+		AnDetector[[anomaly_detector]]
+		Split{Process Gateway & Records}
+		History[[save_history_event]]
+		DR[[update_dr / add_dr]]
+		DT[[add_digital_replicas]]
+		
+		Poll -->|Calls after receiving result| Ingest  
+		S-->Ingest
+		Ingest ==> AnDetector   
+		AnDetector ==>|set the alert_level field| Split  
+		Split ==>|1 - Event Sourcing| History  
+		Split ==>|2 - DR Sync| DR
+		Split ==>|3 - DT Sync| DT
+		
+	end  
+	  
+	subgraph "database_service.py (Storage)"  
+		History ==> MongoDB_Hist[(History Collection)]  
+		DR ==> MongoDB_DR[(Device Collection)]  
+		DT==>MongoDB_DT[(DT Collection)]
+	end  
+	%% --- Legend Section --- 
+	subgraph Legend ["Diagram Legend: Component Shapes"]
+		direction LR 
+		L_Srv([Stadium Shape]) --- L_Srv_T[Server / Host] 
+		L_Mod{{Hexagon}} --- L_Mod_T[Module / Package] 
+		L_Cls[Rectangle] --- L_Cls_T[Class / Object] 
+		L_Fn[[Double Box]] --- L_Fn_T[Function / Method] 
+	end
+	
+%% --- Styling the Legend (Optional) --- 
+style Legend fill:#fcfcfc,stroke:#333,stroke-dasharray: 5 5
 
-    subgraph "client_http.py (Edge Communication)"
-        Poll --> HTTP_GET[GET /data]
-        SendCmd --> HTTP_POST[POST /command]
-        
-        HTTP_GET --> Normalize[ _normalize_result ]
-        HTTP_POST --> Normalize
-    end
-
-    subgraph "data_ingestion.py (Data Processing)"
-        Normalize -->|Standardized Dict| Ingest[ingest_edge_results]
-        
-        Ingest --> Split{Process Gateway & Records}
-        Split -->|1. Event Sourcing| History[save_history_event]
-        Split -->|2. State Sync| DR[update_dr / add_dr]
-        
-        DR -->|Missing DR| Factory[_create_*_dr_entry]
-        Factory -->|Validate| DRFactory[dr_factory.py]
-    end
-
-    subgraph "database_service.py (Storage)"
-        History --> MongoDB_Hist[(History Collection)]
-        DR --> MongoDB_DR[(Device / Sensor Collections)]
-    end
+%% Apply Colors at the very bottom 
+	linkStyle 0,1,4,5,6,7,10,14 stroke:#2ecc71,stroke-width:3.5px; 
+	linkStyle 8,15,16,18 stroke:#2ecc71,stroke-width:1.5px; 
+	linkStyle 2,3,9,11 stroke:#e67e22,stroke-width:3.5px;
+	linkStyle 12,13,17 stroke:#e67e22,stroke-width:1.5px;
 ```
 
 ---

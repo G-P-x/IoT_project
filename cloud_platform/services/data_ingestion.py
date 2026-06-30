@@ -56,25 +56,6 @@ UNIT_MAP = {
     "s1": "m/s",
 }
 
-SENSOR_TYPE_MAP = {"sensor_t1": "temperature", 
-                "sensor_aq1": "air_quality", 
-                "sensor_t2": "temperature",
-                "sensor_aq2": "air_quality"}
-
-
-def _infer_sensor_type(physical_sensor_id: str) -> str:
-    """
-    Get the sensor type from the physical sensor ID.
-
-    Examples:
-        "sensor_t1"  → "temperature"
-        "sensor_aq1" → "air_quality"
-        "sensor_s1"  → "seismic_waves"
-
-    Falls back to "temperature" if the sensor ID is not recognised.
-    """
-    return SENSOR_TYPE_MAP.get(physical_sensor_id, "temperature")
-
 def _find_dr(db_service: DatabaseService, device_id: str) -> Optional[Dict]:
     """
     Look up the gateway DR by the physical device_id.
@@ -87,24 +68,6 @@ def _find_dr(db_service: DatabaseService, device_id: str) -> Optional[Dict]:
     if existing: # if the list is not empty, return the first match (there should ideally be only one)
         return existing[0]
     return None
-
-
-def _link_sensor_to_gateway(db_service, gateway_id: str, sensor_dr_id: str) -> None:
-    """
-    Add a sensor DR _id to the gateway DR's data.sensors list (if not already present).
-    """
-    try:
-        gw = db_service.get_dr("gateway", gateway_id)
-        if not gw:
-            return
-        sensors_list = gw.get("data", {}).get("sensors", [])
-        if sensor_dr_id not in sensors_list:
-            sensors_list.append(sensor_dr_id)
-            db_service.update_dr("gateway", gateway_id, {
-                "data": {"sensors": sensors_list},
-            })
-    except Exception as e:
-        logger.warning("Failed to link sensor %s to gateway %s: %s", sensor_dr_id, gateway_id, e)
 
 def _create_gateway_record(gateway_id: str, gateway_info: Dict, sub: str | None) -> dict:
     ''' 
@@ -383,3 +346,8 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
         
         # Finally, update the digital twin with the gateway DR reference
         dt_factory.add_digital_replicas(dt_factory.dt_id, digital_replicas)
+
+        #### 
+        # now all the sensors and actuators have been processed, and the gateway DR has been updated with the new sensors/actuators and status, and the digital twin has been updated with the new digital replicas.
+        # I can run the services and save the results in the database,
+

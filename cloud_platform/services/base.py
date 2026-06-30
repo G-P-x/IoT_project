@@ -36,7 +36,7 @@ class BaseService(ABC):
         self.name = self.__class__.__name__
 
     @abstractmethod
-    def execute(self, data: Dict, dr_type: str = None, attribute: str = None) -> Any:
+    def execute(self, *args, **kwargs) -> Any:
         """
         Execute the service logic on the provided data.
 
@@ -51,3 +51,19 @@ class BaseService(ABC):
             Processed result in any format (dict, list, scalar, …).
         """
         pass
+    # @abstractmethod
+    # def execute(self, data: Dict, dr_type: str = None, attribute: str = None) -> Any:
+    #     """
+    #     Execute the service logic on the provided data.
+
+    #     Args:
+    #         data:      Input dict — guaranteed to contain 'digital_replicas'.
+    #         dr_type:   Optional filter to restrict processing to a specific DR type
+    #                    (e.g. 'gateway', 'sensor').
+    #         attribute: Optional filter for a specific measurement attribute
+    #                    (e.g. 'temperature', 'air_quality').
+
+    #     Returns:
+    #         Processed result in any format (dict, list, scalar, …).
+    #     """
+    #     pass

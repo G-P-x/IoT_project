@@ -563,3 +563,22 @@ class DTFactory:
                 dt_collection.create_index("metadata.updated_at")
         except Exception as e:
             raise Exception(f"Failed to initialize DT collection: {str(e)}")
+
+def run_services(self, dt_id: str) -> None:
+    """
+    Run all active services for the specified Digital Twin.
+
+    Args:
+        dt_id: The _id of the Digital Twin whose services should be executed.
+    """
+    try:
+        dt_instance = self.get_dt_instance(dt_id)
+        if not dt_instance:
+            raise ValueError(f"Digital Twin with id {dt_id} not found")
+
+        for service in dt_instance.active_services:
+            print(f"Running service: {service.__class__.__name__}")
+            service.run(dt_instance)
+            print(f"Service {service.__class__.__name__} completed")
+    except Exception as e:
+        raise Exception(f"Failed to run services for DT {dt_id}: {str(e)}")
