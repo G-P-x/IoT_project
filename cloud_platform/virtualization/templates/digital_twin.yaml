@@ -20,6 +20,7 @@ schemas:
       - _id_document: str              # ID univoco del DR
         dr_type: str                   # DR type identifier (es. "sensor")
         device_id: str                # Identificatore fisico del sensore
+        device_type: str              # Tipo di sensore (es. "temperature", "humidity", "pressure")
         current_value: str | None #       # Valore corrente del sensore (es. "23.5 °C")
         threshold: float | None
         alert_level: str              # Livello di allerta  

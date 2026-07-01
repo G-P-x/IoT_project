@@ -39,6 +39,67 @@ class DTFactory:
     Factory for creating and managing Digital Twin documents in MongoDB,
     and for reconstituting live DigitalTwin instances from stored data.
     """
+    
+
+    @staticmethod
+    def _add_sensor_replica(dt_id: str, dt_collection: pymongo.collection.Collection, sensor: dict) -> None:
+        """
+        Add a sensor replica to an existing DT manifest.
+
+        Args:
+            dt_id:   Digital Twin _id.
+            dt_collection: pymongo.collection.Collection
+            sensor:  Sensor dict
+            {
+                "dr_type": dr_entry.get("profile", {}).get("device_type"),
+                "device_id": device_id,
+                "current_value": str(device_data.get("value"))+" "+UNIT_MAP.get(device_id.split("-")[1], "NOT_SPECIFIED"),
+                "threshold": str(device_data.get("threshold"))+" "+UNIT_MAP.get(device_id.split("-")[1], "NOT_SPECIFIED"),
+                "alert_level": alert_level,
+            }
+        """
+        try:
+            # Try to update an existing sensor entry (match by _id_document)
+            res = dt_collection.update_one(
+                {"_id": dt_id, "sensors._id_document": sensor.get("_id_document")},
+                {"$set": {
+                    "sensors.$.dr_type": sensor.get("dr_type"),
+                    "sensors.$.device_id": sensor.get("device_id"),
+                    "sensors.$.current_value": sensor.get("current_value"),
+                    "sensors.$.threshold": sensor.get("threshold"),
+                    "sensors.$.alert_level": sensor.get("alert_level"),
+                }}
+            )
+
+            if res.matched_count == 0:
+                # Not present → push new entry
+                dt_collection.update_one(
+                    {"_id": dt_id},
+                    {"$push": {"sensors": {
+                        "_id_document": sensor.get("_id_document"),
+                        "dr_type": sensor.get("dr_type"),
+                        "device_id": sensor.get("device_id"),
+                        "current_value": sensor.get("current_value"),
+                        "threshold": sensor.get("threshold"),
+                        "alert_level": sensor.get("alert_level"),
+                    }}}
+                )
+        except Exception as e:
+            raise Exception(f"Failed to add Digital Replica: {str(e)}") 
+    @staticmethod
+    def _add_actuator_replica(dt_id: str, dt_collection: pymongo.collection.Collection, actuator: dict) -> None:
+        pass
+    
+    @staticmethod
+    def _add_gateway_replica(dt_id: str, dt_collection: pymongo.collection.Collection, gateway: dict) -> None:
+        pass
+
+    ADD_FUNCTIONS = {
+            "gateway": _add_gateway_replica,
+            "sensor": _add_sensor_replica,
+            "actuator": _add_actuator_replica,
+        }
+
 
     def __init__(self, db_service: DatabaseService, schema_registry: SchemaRegistry, dt_schema_path: str = None):
         self.db_service = db_service
@@ -368,6 +429,7 @@ class DTFactory:
             dt_id:   Digital Twin _id.
             dr_refs: List of DR reference dicts, each with 'type' and 'id'.
         """
+        
         try:
             dt_collection = self.db_service.db["digital_twins"]
             digital_twin = dt_collection.find_one({"_id": dt_id})
@@ -376,11 +438,14 @@ class DTFactory:
                 raise ValueError(f"Digital Twin not found: {dt_id}")
             
             for dr_ref in dr_refs:
-                if "type" not in dr_ref or "id" not in dr_ref:
-                    raise ValueError(f"Invalid DR reference: {dr_ref}. Must contain 'type' and 'id'.")
-                if {"type": dr_ref["type"], "id": dr_ref["id"]} in digital_twin["digital_replicas"]:
-                    continue  # Skip if already present
-                self._add_digital_replica(dt_id, dr_ref["type"], dr_ref["id"], dt_collection, digital_twin)
+                if "_id_document" not in dr_ref or "dr_type" not in dr_ref or "device_id" not in dr_ref:
+                    raise ValueError(f"Invalid DR reference: {dr_ref}. Must contain '_id_document', 'dr_type', and 'device_id'.")
+
+                if dr_ref["dr_type"] in self.ADD_FUNCTIONS:
+                    self.ADD_FUNCTIONS[dr_ref["dr_type"]](dt_id, dt_collection, dr_ref)
+                else:
+                    logger.error(f"Unknown DR type: {dr_ref['dr_type']}")
+                    continue  # Skip unknown DR types
         except Exception as e:
             raise Exception(f"Failed to add multiple Digital Replicas: {str(e)}")
         
@@ -397,50 +462,8 @@ class DTFactory:
         except Exception as e:
             raise Exception(f"Failed to update timestamp after adding Digital Replicas: {str(e)}")
     
-    def _add_sensor_replica(self, dt_id: str, dt_collection: pymongo.collection.Collection, sensor: dict) -> None:
-        """
-        Add a sensor replica to an existing DT manifest.
 
-        Args:
-            dt_id:   Digital Twin _id.
-            dt_collection: pymongo.collection.Collection
-            sensor:  Sensor dict
-            {
-                "dr_type": dr_entry.get("profile", {}).get("device_type"),
-                "device_id": device_id,
-                "current_value": str(device_data.get("value"))+" "+UNIT_MAP.get(device_id.split("-")[1], "NOT_SPECIFIED"),
-                "threshold": str(device_data.get("threshold"))+" "+UNIT_MAP.get(device_id.split("-")[1], "NOT_SPECIFIED"),
-                "alert_level": alert_level,
-            }
-        """
-        try:
-            # Try to update an existing sensor entry (match by _id_document)
-            res = dt_collection.update_one(
-                {"_id": dt_id, "sensors._id_document": sensor.get("_id_document")},
-                {"$set": {
-                    "sensors.$.dr_type": sensor.get("dr_type"),
-                    "sensors.$.device_id": sensor.get("device_id"),
-                    "sensors.$.current_value": sensor.get("current_value"),
-                    "sensors.$.threshold": sensor.get("threshold"),
-                    "sensors.$.alert_level": sensor.get("alert_level"),
-                }}
-            )
-
-            if res.matched_count == 0:
-                # Not present → push new entry
-                dt_collection.update_one(
-                    {"_id": dt_id},
-                    {"$push": {"sensors": {
-                        "_id_document": sensor.get("_id_document"),
-                        "dr_type": sensor.get("dr_type"),
-                        "device_id": sensor.get("device_id"),
-                        "current_value": sensor.get("current_value"),
-                        "threshold": sensor.get("threshold"),
-                        "alert_level": sensor.get("alert_level"),
-                    }}}
-                )
-        except Exception as e:
-            raise Exception(f"Failed to add Digital Replica: {str(e)}")        
+           
     # ── Service management ────────────────────────────────────────────
 
     def add_sensor_replicas(self, dt_id: str, sensors: List[dict]) -> None:
@@ -486,7 +509,51 @@ class DTFactory:
                 )
             except Exception as e:
                 raise Exception(f"Failed to update timestamp after adding sensor replicas: {str(e)}")
-    
+
+    def add_actuator_replicas(self, dt_id: str, actuators: List[dict]) -> None:
+        '''
+        Add multiple actuator replicas to an existing DT manifest.
+        Args:
+            dt_id:   Digital Twin _id.
+            actuators: List of actuator dicts (each with 'dr_type', 'device_id', etc.).
+        '''
+        try:
+            # Verify the Collection exists before creating the reference
+            # the digital replica is stored in another collection and we only add reference here
+
+            ## 1. Check if the database service is connected
+            if self.db_service is None or not self.db_service.is_connected():
+                logger.error("Database service is not connected. Cannot add actuator replica.")
+                raise ConnectionError("Database service not connected")
+            
+            # 2. Check if the DT collection exists
+            dt_collection = self.db_service.db["digital_twins"]
+            digital_twin = dt_collection.find_one({"_id": dt_id})
+
+            if not digital_twin:
+                logger.warning(f"Digital Twin with id {dt_id} not found. Cannot add sensor replica.")
+                raise ValueError(f"Digital Twin not found: {dt_id}")
+            
+            # 3. Add/update each sensor replica
+            for actuator in actuators:
+                self._add_actuator_replica(dt_id, dt_collection, actuator)
+        except Exception as e:
+            raise Exception(f"Failed to add multiple actuator replicas: {str(e)}")
+        finally:
+            try:
+                # Finally update the timestamp
+                dt_collection.update_one(
+                    {"_id": dt_id},
+                    {
+                        "$set": {
+                            "metadata.updated_at": datetime.now(timezone.utc).isoformat()
+                        },
+                    },
+                )
+            except Exception as e:
+                raise Exception(f"Failed to update timestamp after adding actuator replicas: {str(e)}")
+
+
     def _get_service_module_mapping(self) -> Dict[str, str]:
         """
         Return the mapping of service class names to their Python module paths.

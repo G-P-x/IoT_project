@@ -110,7 +110,7 @@ def _create_sensor_record(gateway_id: str, sensor_id: str, record: Dict, sub: st
             "status": "active" if record.get("status") == "OK" else "inactive",            
             "source": "operator" if sub else "telemetry",
             "operator_id": sub if sub else None,
-            "alert_level": set_alert_level(record.get("value"), record.get("threshold"))
+            "alert_level": _set_alert_level(record.get("value"), record.get("threshold"))
         },
     })
     return history_entry
@@ -193,7 +193,50 @@ def _create_sensor_dr_entry(gateway_id: str, sensor_id: str, record: Dict) -> di
     sensor_dr = dr_factory.create_dr("sensor", initial_data)
     return sensor_dr
 
-def set_alert_level(value: float, threshold: float) -> str:
+def _create_actuator_dr_entry(gateway_id: str, actuator_id: str, record: Dict) -> dict:
+    pass
+
+def _create_dt_data_entry(dr_entry: Dict, record: Dict, alert_level: str) -> dict:
+    '''
+    Create a summary dict for the DT document based on the DR entry and the latest record.
+    
+    Args:
+        dr_entry: The DR document dict for the sensor/actuator/gateway.
+        record: The latest record dict from the edge results.
+        alert_level: The alert level string ("normal", "warning", "critical").
+    '''
+    dr_type = dr_entry.get("dr_type")
+    device_type = record.get("type")  # e.g., "sensor", "actuator", "gateway"
+    device_id = dr_entry.get("profile", {}).get("device_id")
+
+    if dr_type is None:
+        logger.warning("Missing dr_type for DR '%s'", dr_entry.get("_id"))
+        return {}
+    if device_type is None or device_id is None:
+        logger.warning("Missing device_type or device_id for DR '%s'", dr_entry.get("_id"))
+        return {}
+
+    dt_data = {
+        "_id_document": dr_entry["_id"],
+        "dr_type": dr_type,
+        "device_id": device_id,
+        "device_type": device_type,
+    }
+
+    if dr_type == "sensor":
+        dt_data.update({
+            "current_value": str(record.get("value")) + " " + UNIT_MAP.get(device_id.split("-")[1], "NOT_SPECIFIED"),
+            "threshold": str(record.get("threshold")) + " " + UNIT_MAP.get(device_id.split("-")[1], "NOT_SPECIFIED"),
+            "alert_level": alert_level,
+        })
+        return dt_data
+    
+    elif dr_type == "actuator":
+        pass
+    elif dr_type == "gateway":
+        pass
+
+def _set_alert_level(value: float, threshold: float) -> str:
     """
     Determine the alert level based on the sensor value and threshold.
 
@@ -270,7 +313,7 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
                             })
             
             # phase 3: update digital twin: add digital replica (gateway) in the DT 
-            dt_factory.add_digital_replicas(dt_factory.dt_id, [{"type": "gateway", "id": dr_entry["_id"]}])
+            # dt_factory.add_digital_replicas(dt_factory.dt_id, [{"type": "gateway", "id": dr_entry["_id"]}])
             continue
         
 
@@ -281,6 +324,12 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
         sensors = []
         actuators = []
         dt_sensors = []
+        ## each dr replica store in the DT document share these common fields
+        # - _id_document: the _id of the DR document in the database
+        # - dr_type: the type of the DR (sensor, actuator, gateway)
+        # - device_id: the physical device_id of the sensor/actuator/gateway
+        DT_dr_replicas = []
+
         
         for device_id, device_data in gtw_data.get("records", {}).items():
             try:
@@ -303,7 +352,7 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
 
                     value = device_data.get("value")
                     threshold = device_data.get("threshold")
-                    alert_level = set_alert_level(device_data.get("value"), device_data.get("threshold"))
+                    alert_level = _set_alert_level(device_data.get("value"), device_data.get("threshold"))
 
                     db_service.update_dr("sensor", dr_entry["_id"], {
                         "data": {
@@ -318,14 +367,8 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
                     })
 
                     ### Phase 3: organize the summary of the sensor to be put in the DT document and add it to the list of sensors to be added to the DT at the end of the loop
-                    dt_data = {
-                        "_id_document": dr_entry["_id"],
-                        "dr_type": dr_entry.get("profile", {}).get("device_type"),
-                        "device_id": device_id,
-                        "current_value": str(device_data.get("value"))+" "+UNIT_MAP.get(device_id.split("-")[1], "NOT_SPECIFIED"),
-                        "threshold": str(device_data.get("threshold"))+" "+UNIT_MAP.get(device_id.split("-")[1], "NOT_SPECIFIED"),
-                        "alert_level": alert_level,
-                    }
+                    dt_data = _create_dt_data_entry(dr_entry, device_data, alert_level)
+                    DT_dr_replicas.append(dt_data) # collect all digital replicas (sensors and actuators) to be added to the DT at the end of the loop
                     dt_sensors.append(dt_data)
                     
 
@@ -390,7 +433,8 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
         
         # Finally, update the digital twin with the gateway DR reference
         # dt_factory.add_digital_replicas(dt_factory.dt_id, digital_replicas)
-        dt_factory.add_sensor_replicas(dt_factory.dt_id, dt_sensors)
+        # dt_factory.add_sensor_replicas(dt_factory.dt_id, dt_sensors)
+        dt_factory.add_digital_replicas(dt_factory.dt_id, DT_dr_replicas)
 
         #### 
         # now all the sensors and actuators have been processed, and the gateway DR has been updated with the new sensors/actuators and status, and the digital twin has been updated with the new digital replicas.
