@@ -10,16 +10,27 @@ schemas:
   common_fields:
     _id: str                           # ID univoco del Twin (es. "twin_etna_nord")
     name: str                          # Nome univoco del Twin (es. "Stazione Etna Nord")
-    description: str                   # Descrizione del Twin (es. "Stazione Etna Nord")  
-    services: List[str]                # Lista degli ID dei servizi associati al Twin 
-    digital_replicas:                  # lista dei digital replica associati al twin 
-      - type: str                      # DR type
-        id: str                        # DR id
-
+    description: str                   # Descrizione del Twin (es. "Stazione Etna Nord") 
     metadata:
       created_at: datetime             # Creazione del contenitore Digital Twin
       updated_at: datetime             # Ultimo aggiornamento di QUALSIASI componente
-      status: str                      # Stato globale (es. "ok", "warning", "offline")
+      status: str                      # Stato globale (es. "ok", "warning", "offline") 
+    services: List[str]                # Lista degli ID dei servizi associati al Twin 
+    sensors:                  # lista dei digital replica associati al twin
+      - _id_document: str              # ID univoco del DR
+        dr_type: str                   # DR type identifier (es. "sensor")
+        device_id: str                # Identificatore fisico del sensore
+        current_value: str | None #       # Valore corrente del sensore (es. "23.5 °C")
+        threshold: float | None
+        alert_level: str              # Livello di allerta  
+    actuators:                # lista dei digital replica associati al twin
+      - _id_document: str              # ID univoco del DR
+        dr_type: str                   # DR type identifier (es. "actuator")
+        device_id: str                # Identificatore fisico dell'attuatore
+        device_type: str              # Tipo di attuatore (es. "siren", "valve", "camera", "light", "relay")
+        available_commands: List[str] | None   # Lista dei comandi disponibili per l'attuatore 
+
+    
 
   validations:
     mandatory_fields:
@@ -41,6 +52,8 @@ schemas:
         name: "etna"
         description: "default"
         services: []
+        sensors: []
+        actuators: []
         digital_replicas: []
       metadata:
         status: "OK"

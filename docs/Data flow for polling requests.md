@@ -100,14 +100,14 @@ Then, in `poll_gateways()`, we aggregate all these `result` from the gateways to
 It initializes the ***``results = {}``*** and it adds the key `gateway_id: _normalized_result(result)` 
 
 Now ***`_normalized_result(result)`*** takes the result and it creates a new dictionary composed as follow:
-```
+``` python
 {
 	gateway_info: {
 		"status": "success",
 		"code": %% either response or custom error code %%,
-		"error": None
+		"error": None,
 		"req_timestamp": result.get("req_timestamp"),
-	}	
+	},
 	records: # single gateway's readings
 	{
 		device_id (e.g. "mpu6050_01"): 

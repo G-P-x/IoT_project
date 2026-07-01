@@ -16,11 +16,13 @@ flowchart TD
 		Server([Flask])
 		Poll[GatewayPoller]
 		API{{OperatorAPI}}
+		Services{{services.py}}
 		
 		App -->|Run| Server 
 		Server --> |Listen for HTTP requests| API
 		App -.->|Starts background thread| Poll  
 		Poll -->|Loop every *n* seconds| Poll
+		Poll --> Services
 		
 	end 
 	
@@ -45,14 +47,15 @@ flowchart TD
 		HTTP_GET --> N --> HTTP_GET --> |Returns standardized dict| Poll 
 		HTTP_POST --> N --> HTTP_POST -->|Returns standardized dict| cmdHTTP
 	end    
-	  
+
+%% DATA INGESTION MODULE
 	subgraph "data_ingestion.py (Data Processing)"
 		Ingest[[ingest_edge_results]]
 		AnDetector[[anomaly_detector]]
 		Split{Process Gateway & Records}
 		History[[save_history_event]]
 		DR[[update_dr / add_dr]]
-		DT[[add_digital_replicas]]
+		DTS[[add_sensor_replicas]]
 		
 		Poll -->|Calls after receiving result| Ingest  
 		S-->Ingest
@@ -60,32 +63,45 @@ flowchart TD
 		AnDetector ==>|set the alert_level field| Split  
 		Split ==>|1 - Event Sourcing| History  
 		Split ==>|2 - DR Sync| DR
-		Split ==>|3 - DT Sync| DT
+		Split ==>|3 - DT Sync| DTS
+		
+		
 		
 	end  
 	  
 	subgraph "database_service.py (Storage)"  
+		IngestionDone{Return}
 		History ==> MongoDB_Hist[(History Collection)]  
 		DR ==> MongoDB_DR[(Device Collection)]  
-		DT==>MongoDB_DT[(DT Collection)]
+		DTS==>MongoDB_DT[(DT Collection)]
+		MongoDB_Hist ==> IngestionDone
+		MongoDB_DR ==> IngestionDone
+		MongoDB_DT ==> IngestionDone
+		IngestionDone --> Poll
 	end  
 	%% --- Legend Section --- 
 	subgraph Legend ["Diagram Legend: Component Shapes"]
 		direction LR 
-		L_Srv([Stadium Shape]) --- L_Srv_T[Server / Host] 
-		L_Mod{{Hexagon}} --- L_Mod_T[Module / Package] 
-		L_Cls[Rectangle] --- L_Cls_T[Class / Object] 
-		L_Fn[[Double Box]] --- L_Fn_T[Function / Method] 
+		L_Srv([Stadium Shape]) --> L_Srv_T[Server / Host] 
+		L_Mod{{Hexagon}} --> L_Mod_T[Module / Package] 
+		L_Cls[Rectangle] --> L_Cls_T[Class / Object] 
+		L_Fn[[Double Box]] --> L_Fn_T[Function / Method] 
 	end
 	
 %% --- Styling the Legend (Optional) --- 
 style Legend fill:#fcfcfc,stroke:#333,stroke-dasharray: 5 5
 
 %% Apply Colors at the very bottom 
-	linkStyle 0,1,4,5,6,7,10,14 stroke:#2ecc71,stroke-width:3.5px; 
-	linkStyle 8,15,16,18 stroke:#2ecc71,stroke-width:1.5px; 
-	linkStyle 2,3,9,11 stroke:#e67e22,stroke-width:3.5px;
-	linkStyle 12,13,17 stroke:#e67e22,stroke-width:1.5px;
+	%% green
+	linkStyle 0,1,5,6,7,8,11,15 stroke:#2ecc71,stroke-width:3.5px; 
+	linkStyle 16,17,9,19 stroke:#2ecc71,stroke-width:1.5px; 
+	
+	%% red
+	linkStyle 2,3,10,12 stroke:#e67e22,stroke-width:3.5px;
+	linkStyle 13,14,18,31 stroke:#e67e22,stroke-width:1.5px;
+	
+	%% blue
+	linkStyle 4 stroke:#2222e6,stroke-width:3.5px;
 ```
 
 ---

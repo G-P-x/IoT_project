@@ -249,7 +249,9 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
         history_entry = _create_gateway_record(gateway_id, gtw_data.get("gateway_info", {}), sub = submitter) # create a history record for the gateway, both in case of success and failure
         db_service.save_history_event(history_entry)
 
-        # ----- First case: gateway-level failure (e.g. no response) -----
+
+        ################## ----- First case: gateway-level failure (e.g. no response) ----- ##################
+
         if gtw_data.get("gateway_info", {}).get("status") != "success":
             logger.info("Processing gateway-level failure for device '%s'", gateway_id)
             # phase 2: find or create the gateway DR and set its status to "inactive" (if it already exists, just update the status and last_update timestamp, if it doesn't exist, create it with the status "inactive" and no sensors/actuators)
@@ -271,43 +273,62 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
             dt_factory.add_digital_replicas(dt_factory.dt_id, [{"type": "gateway", "id": dr_entry["_id"]}])
             continue
         
-        # ----- Second case: gateway-level success -----
+
+        ################## ----- Second case: gateway-level success ----- ##################
+
         logger.info("Processing gateway-level success for device '%s'", gateway_id)
         logger.info("Edge results: %s", gtw_data)
         sensors = []
         actuators = []
-        digital_replicas = []
+        dt_sensors = []
         
         for device_id, device_data in gtw_data.get("records", {}).items():
             try:
                 logger.info("Processing device '%s' in gateway '%s'", device_id, gateway_id)
                 device_data = dict(device_data)  # Ensure device_data is a dict
+
                 # create a history entry and DR entry for the sensor record
                 if device_data.get("type") == "sensor":
 
-                    # Phase 1: create a history record for the sensor with status "active" or "inactive" based on the record status and source "operator" or "telemetry" based on the submitter
+                    ### Phase 1: create a history record for the sensor with status "active" or "inactive" based on the record status and source "operator" or "telemetry" based on the submitter
                     history_entry = _create_sensor_record(gateway_id, device_id, device_data, sub = submitter)
                     db_service.save_history_event(history_entry)
                     sensors.append(device_id)
 
-                    # Phase 2: find or create the sensor DR and link it to the gateway DR (if not already linked)
+                    ### Phase 2: find or create the sensor DR and link it to the gateway DR (if not already linked)
                     dr_entry = _find_dr(db_service, device_id) # find an existing sensor DR by physical sensor_id
                     if not dr_entry: # if no sensor DR exists, create one
                         dr_entry = _create_sensor_dr_entry(gateway_id, device_id, device_data) # create the sensor DR dictionary using sensor.yaml template
                         dr_entry = db_service.add_dr(dr_entry) # and insert in the collection
 
+                    value = device_data.get("value")
+                    threshold = device_data.get("threshold")
+                    alert_level = set_alert_level(device_data.get("value"), device_data.get("threshold"))
+
                     db_service.update_dr("sensor", dr_entry["_id"], {
                         "data": {
-                            "value": device_data.get("value"),
-                            "threshold": device_data.get("threshold"),
+                            "value": value,
+                            "threshold": threshold,
                         },
                         "metadata": {
                             "last_update": device_data.get("timestamp", datetime.now(timezone.utc).isoformat()),
                             "status": "active" if device_data.get("status") == "OK" else "inactive",
-                            "alert_level": set_alert_level(device_data.get("value"), device_data.get("threshold"))
+                            "alert_level": alert_level
                         },
                     })
+
+                    ### Phase 3: organize the summary of the sensor to be put in the DT document and add it to the list of sensors to be added to the DT at the end of the loop
+                    dt_data = {
+                        "_id_document": dr_entry["_id"],
+                        "dr_type": dr_entry.get("profile", {}).get("device_type"),
+                        "device_id": device_id,
+                        "current_value": str(device_data.get("value"))+" "+UNIT_MAP.get(device_id.split("-")[1], "NOT_SPECIFIED"),
+                        "threshold": str(device_data.get("threshold"))+" "+UNIT_MAP.get(device_id.split("-")[1], "NOT_SPECIFIED"),
+                        "alert_level": alert_level,
+                    }
+                    dt_sensors.append(dt_data)
                     
+
                 elif device_data.get("type") == "actuator":
                     # Phase 1: create a history record for the actuator with status "active" or "inactive" based on the record status and source "operator" or "telemetry" based on the submitter
                     history_entry = _create_actuator_record(gateway_id, device_id, device_data, sub=submitter, command=command)
@@ -335,7 +356,8 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
                 logger.error("Error processing device '%s' in gateway '%s': %s", device_id, gateway_id, e)
                 continue
             
-            digital_replicas.append({"type": dr_entry.get("profile", {}).get("device_type"), "id": dr_entry["_id"]}) # collect all digital replicas (sensors and actuators) to be added to the DT at the end of the loop
+
+            # digital_replicas.append({"type": dr_entry.get("profile", {}).get("device_type"), "id": dr_entry["_id"]}) # collect all digital replicas (sensors and actuators) to be added to the DT at the end of the loop
 
         # Update the gateway DR with the new sensors/actuators and status, keeping existing ones
         gateway_dr = _find_dr(db_service, gateway_id)
@@ -364,10 +386,11 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
         else:
             gateway_dr = _create_gateway_dr_entry(gateway_id, gtw_data.get("gateway_info", {}), sensors=sensors, actuators=actuators)
             db_service.add_dr(gateway_dr)
-        digital_replicas.append({"type": gateway_dr.get("dr_type"), "id": gateway_dr["_id"]})
+        # digital_replicas.append({"type": gateway_dr.get("dr_type"), "id": gateway_dr["_id"]})
         
         # Finally, update the digital twin with the gateway DR reference
-        dt_factory.add_digital_replicas(dt_factory.dt_id, digital_replicas)
+        # dt_factory.add_digital_replicas(dt_factory.dt_id, digital_replicas)
+        dt_factory.add_sensor_replicas(dt_factory.dt_id, dt_sensors)
 
         #### 
         # now all the sensors and actuators have been processed, and the gateway DR has been updated with the new sensors/actuators and status, and the digital twin has been updated with the new digital replicas.
