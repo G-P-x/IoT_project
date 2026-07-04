@@ -217,5 +217,49 @@ class AlertingService(BaseService):
     This service could define thresholds for certain attributes and trigger alerts
     when those thresholds are exceeded.
     """
-    def execute(self, data: Dict, dr_type: str = None, attribute: str = None) -> Dict:
-        pass
+    def execute(self, config: Dict, data: Dict) -> Dict:
+        '''
+        Run alerting logic on measurements from the DT's Digital Replicas.
+        
+        Args:
+            config:    Dict containing service configuration (stored in DT manifest).
+                Optional — only consider DRs of this type (e.g. 'sensor').
+                Optional — only consider measurements with this measure_type
+            data:      List containing 'digital_replicas' (list of DR dicts).
+                [
+                    {
+                        '_id_document': 'e0a244f2-8316-4cf5-ba41-e632e1ff8a53', 
+                        'dr_type': 'sensor', 
+                        'device_id': 'CCDDEEFF-t2', 
+                        'device_type': 't2', 
+                        'current_value': '56.44 °C', 
+                        'threshold': '27.53 °C', 
+                        'alert_level': 'critical'
+                    }
+                ]
+        '''
+        for dr in data:
+            try:
+                device_id = dr.get("device_id")
+                dr_type = dr.get("dr_type")
+                device_type = dr.get("device_type")
+                current_value = float(dr.get("current_value").split(" ")[0])  # Extract numeric part
+                threshold = float(dr.get("threshold").split(" ")[0])  # Extract numeric part
+                alert_level = dr.get("alert_level")
+            except AttributeError:
+                logger.warning("Skipping DR with missing device_id.")
+                continue
+            except (ValueError, IndexError):
+                logger.warning("Skipping DR with invalid current_value or threshold format.")
+                continue
+
+            if alert_level == "critical":
+                message = (
+                    f"ALERT: DR {device_id} (type: {dr_type}, device_type: {device_type}) "
+                    f"has critical alert level.\nCurrent value: {current_value},\n"
+                    f"Threshold: {threshold}"
+                )
+                logger.warning(message)
+                return {"status": "alert", "message": message}
+
+        return {"status": "ok", "message": "No critical alerts found."}

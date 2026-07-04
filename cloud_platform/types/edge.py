@@ -35,3 +35,8 @@ class PrioritizedItem:
     priority: int
     # compare=False prevents Python from crashing when trying to sort dictionaries
     item: Any = field(compare=False)
+
+@dataclass
+class ServiceQueueItem:
+    dt_data: Any  # list of dicts containing the digital twin data for each device
+    command_id: str | None = None  # command_id of the command that generated this result

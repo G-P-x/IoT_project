@@ -52,7 +52,8 @@ class DTFactory:
             sensor:  Sensor dict
             {
                 "dr_type": dr_entry.get("profile", {}).get("device_type"),
-                "device_id": device_id,
+                "device_id": device_id, e.g., "AABBCCDD-t1", "actuator-002"
+                "device_type": device_type, e.g., "t1", "t2", "None"
                 "current_value": str(device_data.get("value"))+" "+UNIT_MAP.get(device_id.split("-")[1], "NOT_SPECIFIED"),
                 "threshold": str(device_data.get("threshold"))+" "+UNIT_MAP.get(device_id.split("-")[1], "NOT_SPECIFIED"),
                 "alert_level": alert_level,
@@ -65,6 +66,7 @@ class DTFactory:
                 {"$set": {
                     "sensors.$.dr_type": sensor.get("dr_type"),
                     "sensors.$.device_id": sensor.get("device_id"),
+                    "sensors.$.device_type": sensor.get("device_type"),
                     "sensors.$.current_value": sensor.get("current_value"),
                     "sensors.$.threshold": sensor.get("threshold"),
                     "sensors.$.alert_level": sensor.get("alert_level"),
@@ -79,6 +81,7 @@ class DTFactory:
                         "_id_document": sensor.get("_id_document"),
                         "dr_type": sensor.get("dr_type"),
                         "device_id": sensor.get("device_id"),
+                        "device_type": sensor.get("device_type"),
                         "current_value": sensor.get("current_value"),
                         "threshold": sensor.get("threshold"),
                         "alert_level": sensor.get("alert_level"),
@@ -104,7 +107,7 @@ class DTFactory:
     def __init__(self, db_service: DatabaseService, schema_registry: SchemaRegistry, dt_schema_path: str = None):
         self.db_service = db_service
         self.schema_registry = schema_registry
-        self.dt_id = None
+        self.dt_id = None # unique identifier of the DT document in MongoDB (set after creation -- create_dt() -- or after reconstitution -- create_dt_from_data())
         
         # Load the DT YAML schema (similar to DRFactory)
         if dt_schema_path is None:
@@ -255,6 +258,7 @@ class DTFactory:
     def create_dt(self, name: str = None, description: str = None, initial_data: Dict[str, Any] = None) -> str:
         """
         Create a new Digital Twin manifest in MongoDB using YAML schema-based validation.
+        If a DT with the same unique `name` already exists, return its _id instead of creating a duplicate.
 
         Steps:
             1. Build Pydantic models from the YAML schema.
@@ -386,40 +390,40 @@ class DTFactory:
 
     # ── Digital Replica management ────────────────────────────────────
 
-    def _add_digital_replica(self, dt_id: str, dr_type: str, dr_id: str, dt_collection, digital_twin) -> None:
-        """
-        Add a DR reference to an existing DT manifest.
+    # def _add_digital_replica(self, dt_id: str, dr_type: str, dr_id: str, dt_collection, digital_twin) -> None:
+    #     """
+    #     Add a DR reference to an existing DT manifest.
 
-        Before adding, the method verifies that the DR actually exists in the
-        database — this prevents dangling references.
+    #     Before adding, the method verifies that the DR actually exists in the
+    #     database — this prevents dangling references.
 
-        Args:
-            dt_id:   Digital Twin _id.
-            dr_type: DR type (e.g. 'gateway', 'sensor').
-            dr_id:   DR _id.
-        """
-        try:
-            # Verify the DR exists before creating the reference
-            # the digital replica is stored in another collection and we only add reference here
+    #     Args:
+    #         dt_id:   Digital Twin _id.
+    #         dr_type: DR type (e.g. 'gateway', 'sensor').
+    #         dr_id:   DR _id.
+    #     """
+    #     try:
+    #         # Verify the DR exists before creating the reference
+    #         # the digital replica is stored in another collection and we only add reference here
             
-            if not digital_twin:
-                logger.warning(f"Digital Twin with id {dt_id} not found. Cannot add DR reference.")
-                raise ValueError(f"Digital Twin not found: {dt_id}")
+    #         if not digital_twin:
+    #             logger.warning(f"Digital Twin with id {dt_id} not found. Cannot add DR reference.")
+    #             raise ValueError(f"Digital Twin not found: {dt_id}")
 
-            # Atomically push the reference into the DT document
-            dt_collection.update_one(
-                {"_id": dt_id},
-                {
-                    "$push": {
-                        "digital_replicas": {
-                            "type": dr_type,
-                            "id": dr_id,
-                        }
-                    },
-                },
-            )
-        except Exception as e:
-            raise Exception(f"Failed to add Digital Replica: {str(e)}")
+    #         # Atomically push the reference into the DT document
+    #         dt_collection.update_one(
+    #             {"_id": dt_id},
+    #             {
+    #                 "$push": {
+    #                     "digital_replicas": {
+    #                         "type": dr_type,
+    #                         "id": dr_id,
+    #                     }
+    #                 },
+    #             },
+    #         )
+    #     except Exception as e:
+    #         raise Exception(f"Failed to add Digital Replica: {str(e)}")
 
     def add_digital_replicas(self, dt_id: str, dr_refs: List[Dict[str, str]]) -> None:
         """
@@ -448,20 +452,19 @@ class DTFactory:
                     continue  # Skip unknown DR types
         except Exception as e:
             raise Exception(f"Failed to add multiple Digital Replicas: {str(e)}")
-        
-        try:
-            # Finally update the timestamp
-            dt_collection.update_one(
-                {"_id": dt_id},
-                {
-                    "$set": {
-                        "metadata.updated_at": datetime.now(timezone.utc).isoformat()
+        finally:
+            try:
+                # Finally update the timestamp
+                dt_collection.update_one(
+                    {"_id": dt_id},
+                    {
+                        "$set": {
+                            "metadata.updated_at": datetime.now(timezone.utc).isoformat()
+                        },
                     },
-                },
-            )
-        except Exception as e:
-            raise Exception(f"Failed to update timestamp after adding Digital Replicas: {str(e)}")
-    
+                )
+            except Exception as e:
+                raise Exception(f"Failed to update timestamp after adding Digital Replicas: {str(e)}")    
 
            
     # ── Service management ────────────────────────────────────────────
@@ -553,7 +556,6 @@ class DTFactory:
             except Exception as e:
                 raise Exception(f"Failed to update timestamp after adding actuator replicas: {str(e)}")
 
-
     def _get_service_module_mapping(self) -> Dict[str, str]:
         """
         Return the mapping of service class names to their Python module paths.
@@ -563,7 +565,7 @@ class DTFactory:
         relies on this mapping.
         """
         return {
-            "AggregationService": "cloud_platform.services.analytics",
+            "MonitorService": "cloud_platform.services.analytics",
             # Add new services here, e.g.:
             # "AnomalyDetectionService": "cloud_platform.services.anomaly_detection",
         }
@@ -608,19 +610,38 @@ class DTFactory:
                 "name": service_name,
                 "config": service_config or {},
                 "status": "active",
-                "added_at": datetime.utcnow(),
+                "added_at": datetime.now().isoformat(),
             }
 
             dt_collection.update_one(
                 {"_id": dt_id},
                 {
                     "$push": {"services": service_data},
-                    "$set": {"metadata.updated_at": datetime.utcnow()},
+                    "$set": {"metadata.updated_at": datetime.now().isoformat()},
                 },
             )
         except Exception as e:
             raise Exception(f"Failed to add service: {str(e)}")
 
+    def remove_service(self, dt_id: str, service_name: str) -> None:
+        """
+        Remove a service from a DT by deleting its descriptor from the manifest.
+
+        Args:
+            dt_id:        Digital Twin _id.
+            service_name: Class name of the service to remove.
+        """
+        try:
+            dt_collection = self.db_service.db["digital_twins"]
+            dt_collection.update_one(
+                {"_id": dt_id},
+                {
+                    "$pull": {"services": {"name": service_name}},
+                    "$set": {"metadata.updated_at": datetime.now().isoformat()},
+                },
+            )
+        except Exception as e:
+            raise Exception(f"Failed to remove service: {str(e)}")
     # ── DT instance reconstitution ────────────────────────────────────
 
     def create_dt_from_data(self, dt_data: dict) -> DigitalTwin:
