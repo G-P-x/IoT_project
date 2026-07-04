@@ -217,7 +217,7 @@ class AlertingService(BaseService):
     This service could define thresholds for certain attributes and trigger alerts
     when those thresholds are exceeded.
     """
-    def execute(self, config: Dict, data: Dict) -> Dict:
+    def execute(self, data: Dict, config: Dict = {}) -> Dict:
         '''
         Run alerting logic on measurements from the DT's Digital Replicas.
         
@@ -260,6 +260,6 @@ class AlertingService(BaseService):
                     f"Threshold: {threshold}"
                 )
                 logger.warning(message)
-                return {"status": "alert", "message": message}
+                return {"service": "alerting", "status": "alert", "message": message}
 
-        return {"status": "ok", "message": "No critical alerts found."}
+        return {"service": "alerting", "status": "ok", "message": "No critical alerts found."}

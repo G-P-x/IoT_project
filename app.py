@@ -313,8 +313,9 @@ class ServiceWorker:
     This class encapsulates the service worker that runs in a separate thread.
     It continuously listens to the service queue for new tasks and processes them.
     """
-    def __init__(self, service_queue: queue.Queue):
+    def __init__(self, service_queue: queue.Queue, dt_factory=None):
         self.service_queue = service_queue
+        self.dt_factory = dt_factory
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
@@ -353,12 +354,39 @@ class ServiceWorker:
     def process_service_task(self, task):
         """
         Implement the logic to process the service task.
-        This is a placeholder method and should be replaced with actual processing logic.
+        
+        Args:
+            task (ServiceQueueItem): The service task to process.
+                dt_data : 
+                    common structure for all devices, regardless of type:{
+                        "_id_document": dr_entry["_id"],
+                        "dr_type": dr_type,
+                        "device_id": device_id,
+                        "device_type": device_type,
+                    }
+
+                    sensor-specific structure (only if dr_type == "sensor"): {
+                        "current_value": 25.0 °C,  # current reading of the sensor
+                        "threshold": 32.0 °C,      # threshold value for alerting
+                        "alert_level": str,        # "critical" or "info"
+                    }
+
+                command_id: str | None,  # command_id of the command that generated this result
         """
-        logger.info("Processing service task")
-        with open("service_task_log.txt", "a") as f:
-            f.write(f"Processing service task with command_id: {task.command_id}\n")
-            f.write(f"DT data: {task.dt_data}\n\n")
+        ### Get the list of services / instantieted objects from DT manifest and execute them 
+        dt_services = self.dt_factory.get_services()
+        for service in dt_services:
+            try:
+                result = service.execute(task.dt_data)
+                logger.info("Service executed successfully with result: %s", result)
+            except Exception as exc:
+                logger.exception("Service %s execution failed: %s", service.__class__.__name__, exc)
+
+
+        # with open("service_task_log.txt", "a") as f:
+        #     f.write(f"Processing service task with command_id: {task.command_id}\n")
+        #     f.write(f"DT data: {task.dt_data}\n\n")
+
         
 
 if __name__ == "__main__":
@@ -399,7 +427,9 @@ if __name__ == "__main__":
     poller.start()
 
     service_worker = ServiceWorker(
-        service_queue = server.app.config.get("SERVICE_QUEUE")
+        service_queue = server.app.config.get("SERVICE_QUEUE"),
+        db_service = server.app.config.get("DB_SERVICE"),
+        dt_factory = server.app.config.get("DT_FACTORY")
     )
     service_worker.start()
 

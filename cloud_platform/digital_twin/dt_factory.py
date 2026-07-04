@@ -103,12 +103,17 @@ class DTFactory:
             "actuator": _add_actuator_replica,
         }
 
+    ## Keep a static mapping of implemented service names to their module paths for dynamic import
+    IMPLEMENTED_SERVICES = {
+        "AlertingService": "cloud_platform.services.analytics",
+    }
 
     def __init__(self, db_service: DatabaseService, schema_registry: SchemaRegistry, dt_schema_path: str = None):
         self.db_service = db_service
         self.schema_registry = schema_registry
         self.dt_id = None # unique identifier of the DT document in MongoDB (set after creation -- create_dt() -- or after reconstitution -- create_dt_from_data())
-        
+        self._registered_services = {}  # service_name → service_class (populated dynamically)
+
         # Load the DT YAML schema (similar to DRFactory)
         if dt_schema_path is None:
             # Default path: assumes digital_twin.yaml is in the templates folder
@@ -390,41 +395,6 @@ class DTFactory:
 
     # ── Digital Replica management ────────────────────────────────────
 
-    # def _add_digital_replica(self, dt_id: str, dr_type: str, dr_id: str, dt_collection, digital_twin) -> None:
-    #     """
-    #     Add a DR reference to an existing DT manifest.
-
-    #     Before adding, the method verifies that the DR actually exists in the
-    #     database — this prevents dangling references.
-
-    #     Args:
-    #         dt_id:   Digital Twin _id.
-    #         dr_type: DR type (e.g. 'gateway', 'sensor').
-    #         dr_id:   DR _id.
-    #     """
-    #     try:
-    #         # Verify the DR exists before creating the reference
-    #         # the digital replica is stored in another collection and we only add reference here
-            
-    #         if not digital_twin:
-    #             logger.warning(f"Digital Twin with id {dt_id} not found. Cannot add DR reference.")
-    #             raise ValueError(f"Digital Twin not found: {dt_id}")
-
-    #         # Atomically push the reference into the DT document
-    #         dt_collection.update_one(
-    #             {"_id": dt_id},
-    #             {
-    #                 "$push": {
-    #                     "digital_replicas": {
-    #                         "type": dr_type,
-    #                         "id": dr_id,
-    #                     }
-    #                 },
-    #             },
-    #         )
-    #     except Exception as e:
-    #         raise Exception(f"Failed to add Digital Replica: {str(e)}")
-
     def add_digital_replicas(self, dt_id: str, dr_refs: List[Dict[str, str]]) -> None:
         """
         Add multiple DR references to an existing DT manifest.
@@ -469,50 +439,7 @@ class DTFactory:
            
     # ── Service management ────────────────────────────────────────────
 
-    def add_sensor_replicas(self, dt_id: str, sensors: List[dict]) -> None:
-        """
-        Add multiple sensor replicas to an existing DT manifest.
-
-        Args:
-            dt_id:   Digital Twin _id.
-            sensors: List of sensor dicts (each with 'dr_type', 'device_id', etc.).
-        """
-        try:
-            # Verify the Collection exists before creating the reference
-            # the digital replica is stored in another collection and we only add reference here
-
-            ## 1. Check if the database service is connected
-            if self.db_service is None or not self.db_service.is_connected():
-                logger.error("Database service is not connected. Cannot add sensor replica.")
-                raise ConnectionError("Database service not connected")
-            
-            # 2. Check if the DT collection exists
-            dt_collection = self.db_service.db["digital_twins"]
-            digital_twin = dt_collection.find_one({"_id": dt_id})
-
-            if not digital_twin:
-                logger.warning(f"Digital Twin with id {dt_id} not found. Cannot add sensor replica.")
-                raise ValueError(f"Digital Twin not found: {dt_id}")
-            
-            # 3. Add/update each sensor replica
-            for sensor in sensors:
-                self._add_sensor_replica(dt_id, dt_collection, sensor)
-        except Exception as e:
-            raise Exception(f"Failed to add multiple sensor replicas: {str(e)}")
-        finally:
-            try:
-                # Finally update the timestamp
-                dt_collection.update_one(
-                    {"_id": dt_id},
-                    {
-                        "$set": {
-                            "metadata.updated_at": datetime.now(timezone.utc).isoformat()
-                        },
-                    },
-                )
-            except Exception as e:
-                raise Exception(f"Failed to update timestamp after adding sensor replicas: {str(e)}")
-
+    
     def add_actuator_replicas(self, dt_id: str, actuators: List[dict]) -> None:
         '''
         Add multiple actuator replicas to an existing DT manifest.
@@ -564,13 +491,20 @@ class DTFactory:
         system. The dynamic import in add_service() and create_dt_from_data()
         relies on this mapping.
         """
-        return {
-            "MonitorService": "cloud_platform.services.analytics",
-            # Add new services here, e.g.:
-            # "AnomalyDetectionService": "cloud_platform.services.anomaly_detection",
-        }
+        return self._registered_services
 
-    def add_service(self, dt_id: str, service_name: str, service_config: Dict = None) -> None:
+    def get_services(self) -> List[Any]:
+        """
+        Instantiate the service classes currently registered in this factory.
+
+        Returns:
+            A list of service instances created from the classes cached in
+            ``self._registered_services``.
+        """
+        return [service_class() for service_class in self._registered_services.values()]
+
+
+    def add_service(self, dt_id: str, service_name: str, service_config: Dict = {}) -> None:
         """
         Register a service with a DT by writing a service descriptor to its manifest.
 
@@ -586,14 +520,13 @@ class DTFactory:
             dt_collection = self.db_service.db["digital_twins"]
 
             # Look up the module path from the mapping
-            module_mapping = self._get_service_module_mapping()
-            if service_name not in module_mapping:
+            if service_name not in __class__.IMPLEMENTED_SERVICES:
                 raise ValueError(
                     f"Service '{service_name}' not configured in module mapping. "
-                    f"Available: {list(module_mapping.keys())}"
+                    f"Available: {list(__class__.IMPLEMENTED_SERVICES.keys())}"
                 )
 
-            module_name = module_mapping[service_name]
+            module_name = __class__.IMPLEMENTED_SERVICES[service_name]
 
             try:
                 # Validate that the service can be imported and instantiated
@@ -620,6 +553,7 @@ class DTFactory:
                     "$set": {"metadata.updated_at": datetime.now().isoformat()},
                 },
             )
+            self._registered_services[service_name] = service_class  # cache the class for later use
         except Exception as e:
             raise Exception(f"Failed to add service: {str(e)}")
 
@@ -640,6 +574,7 @@ class DTFactory:
                     "$set": {"metadata.updated_at": datetime.now().isoformat()},
                 },
             )
+            self._registered_services.pop(service_name, None)  # remove from cache if present
         except Exception as e:
             raise Exception(f"Failed to remove service: {str(e)}")
     # ── DT instance reconstitution ────────────────────────────────────
@@ -740,22 +675,3 @@ class DTFactory:
                 dt_collection.create_index("metadata.updated_at")
         except Exception as e:
             raise Exception(f"Failed to initialize DT collection: {str(e)}")
-
-def run_services(self, dt_id: str) -> None:
-    """
-    Run all active services for the specified Digital Twin.
-
-    Args:
-        dt_id: The _id of the Digital Twin whose services should be executed.
-    """
-    try:
-        dt_instance = self.get_dt_instance(dt_id)
-        if not dt_instance:
-            raise ValueError(f"Digital Twin with id {dt_id} not found")
-
-        for service in dt_instance.active_services:
-            print(f"Running service: {service.__class__.__name__}")
-            service.run(dt_instance)
-            print(f"Service {service.__class__.__name__} completed")
-    except Exception as e:
-        raise Exception(f"Failed to run services for DT {dt_id}: {str(e)}")
