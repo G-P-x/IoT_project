@@ -2,6 +2,8 @@
 from typing import TypedDict, Dict
 from typing import Literal
 from pydantic.v1 import BaseModel
+from typing import Any
+from dataclasses import dataclass, field
 
 # ── pydantic for enhanced data validation ──────────────────────────────────────────
 class GatewayInfo(BaseModel):
@@ -25,3 +27,11 @@ class DeviceResult(BaseModel):
 
 class EdgeResults(BaseModel):
     edge: dict[str, DeviceResult]  # gateway_id → DeviceResult
+
+
+
+@dataclass(order=True)
+class PrioritizedItem:
+    priority: int
+    # compare=False prevents Python from crashing when trying to sort dictionaries
+    item: Any = field(compare=False)

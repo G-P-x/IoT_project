@@ -7,6 +7,109 @@ Both operations rely on edge gateway communication, but they conceptually merge 
 ---
 
 ## 1. High-Level Flow Diagram
+```mermaid
+flowchart TD  
+%% Application Entry Point
+	subgraph "Application Entry Point"  
+		App{{app.py}}  
+		Server([Flask])
+		Poll[GatewayPoller]
+		API{{OperatorAPI}}
+		Service[services.py]
+		Consumer[IngestionWorker]
+		QIngest[(IngestionQueue)]
+		
+		
+		App -->|Run| Server 
+		Server --> |Operator HTTP requests| API
+		Server --> |INIT| QIngest
+		App -.-> |Starts poller| Poll --> |PUT| QIngest
+		App -.-> |Starts consumer| Consumer
+		App -.-> |Start services| Service
+		QIngest --> |GET| Consumer
+		
+		
+	end 
+
+%% OPERATOR_API MODULE
+	subgraph "operator_api.py"
+		CMD_SEND[CommandDispatcher]
+		SensSend[[send_command]]
+		S[[POST /command/send]]
+		cmdHTTP[[_send_command_to_*]]
+		
+		API --> S --> CMD_SEND --> SensSend --> cmdHTTP --> S --> |PUT| QIngest
+	end
+	
+%% CLIENT_HTTP MODULE
+	subgraph "client_http.py (Edge Communication)"  
+		HTTP_GET[[poll_gateway]]  
+		HTTP_POST[[send_command_to*]]
+		N[[normalize_result]]
+		  
+		Poll --> |loop| HTTP_GET  
+		cmdHTTP --> HTTP_POST  
+		HTTP_GET --> N --> HTTP_GET --> |Returns standardized dict| Poll 
+		HTTP_POST --> N --> HTTP_POST -->|Returns standardized dict| cmdHTTP
+	end    
+
+%% DATA INGESTION MODULE
+	subgraph "data_ingestion.py (Data Processing)"
+		Ingest[[ingest_edge_results]]
+		AnDetector[[anomaly_detector]]
+		Split{Process Gateway & Records}
+		History[[save_history_event]]
+		DR[[update_dr / add_dr]]
+		DTS[[add_sensor_replicas]]
+	 
+		Consumer ==> Ingest
+		Ingest ==> AnDetector   
+		AnDetector ==>|set the alert_level field| Split  
+		Split ==>|1 - Event Sourcing| History  
+		Split ==>|2 - DR Sync| DR
+		Split ==>|3 - DT Sync| DTS
+		
+		
+		
+	end  
+	  
+	subgraph "database_service.py (Storage)"  
+		History ==> MongoDB_Hist[(History Collection)]  
+		DR ==> MongoDB_DR[(Device Collection)]  
+		DTS==>MongoDB_DT[(DT Collection)]
+
+	end  
+	%% --- Legend Section --- 
+	subgraph Legend ["Diagram Legend: Component Shapes"]
+		direction LR 
+		L_Srv([Stadium Shape]) --> L_Srv_T[Server / Host] 
+		L_Mod{{Hexagon}} --> L_Mod_T[Module / Package] 
+		L_Cls[Rectangle] --> L_Cls_T[Class / Object] 
+		L_Fn[[Double Box]] --> L_Fn_T[Function / Method] 
+		
+	end
+	
+%% --- Styling the Legend (Optional) --- 
+style Legend fill:#fcfcfc,stroke:#333,stroke-dasharray: 5 5
+
+%% Apply Colors at the very bottom 
+	%% green forward
+	linkStyle 0,1,8,9,10,11,15,19,2 stroke:#2ecc71,stroke-width:3.5px; 
+	%% green backward
+	linkStyle 20,21,12,13 stroke:#2ecc71,stroke-width:1.5px; 
+	
+	%% red forward
+	linkStyle 3,14,16 stroke:#e67e22,stroke-width:3.5px;
+	%% red backward
+	linkStyle 4,17,18 stroke:#e67e22,stroke-width:1.5px;
+	
+	%% blue
+	linkStyle 5,7 stroke:#2222e6,stroke-width:3.5px;
+	
+	%% fucsia #2222e6
+	
+```
+## 2. Detailed-Level Flow Diagram
 
 ```mermaid  
 flowchart TD  
@@ -17,11 +120,14 @@ flowchart TD
 		Poll[GatewayPoller]
 		API{{OperatorAPI}}
 		Services{{services.py}}
+		Consumer[IngestionWorker]
 		
 		App -->|Run| Server 
 		Server --> |Listen for HTTP requests| API
-		App -.->|Starts background thread| Poll  
+		App -.-> |Starts poller| Poll  
+		App -.-> |Starts consumer| Consumer
 		Poll -->|Loop every *n* seconds| Poll
+		
 		Poll --> Services
 		
 	end 
@@ -92,16 +198,18 @@ flowchart TD
 style Legend fill:#fcfcfc,stroke:#333,stroke-dasharray: 5 5
 
 %% Apply Colors at the very bottom 
-	%% green
-	linkStyle 0,1,5,6,7,8,11,15 stroke:#2ecc71,stroke-width:3.5px; 
+	%% green forward
+	linkStyle 0,1,2,6,7,8,11,15 stroke:#2ecc71,stroke-width:3.5px; 
+	%% green backward
 	linkStyle 16,17,9,19 stroke:#2ecc71,stroke-width:1.5px; 
 	
-	%% red
-	linkStyle 2,3,10,12 stroke:#e67e22,stroke-width:3.5px;
-	linkStyle 13,14,18,31 stroke:#e67e22,stroke-width:1.5px;
+	%% red forward
+	linkStyle 3,14,16 stroke:#e67e22,stroke-width:3.5px;
+	%% red backward
+	linkStyle 17,18 stroke:#e67e22,stroke-width:1.5px;
 	
 	%% blue
-	linkStyle 4 stroke:#2222e6,stroke-width:3.5px;
+	linkStyle 5 stroke:#2222e6,stroke-width:3.5px;
 ```
 
 ---

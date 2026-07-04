@@ -5,8 +5,9 @@ from cloud_platform.application import client_http
 from cloud_platform.services.data_ingestion import ingest_edge_results
 from pydantic import BaseModel, ValidationError
 from typing import Literal
-from concurrent.futures import ThreadPoolExecutor
 
+## ThreadPoolExecutor for background ingestion tasks
+from cloud_platform.types.edge import PrioritizedItem
 # ── Imports for Mock data for testing (delete in production) ──────────────────────────────────
 from datetime import datetime, timedelta
 import random
@@ -19,9 +20,6 @@ import random
 # 4. View health events - sensor failures, connectivity issues, etc.
 # 5. View current state of the DT (latest telemetry, health status, etc.)
 # 6. View sensor status and diagnostics
-
-# executor for returning results to the frontend without waiting for  database ingestion to complete
-_executor = ThreadPoolExecutor(max_workers=2)
 
 # ────────────────── Command Dispatcher ──────────────────
 class CommandDispatcher:
@@ -223,14 +221,13 @@ def send():
     # Dispatch the command to the appropriate edge devices
     edge_results = dispatcher.send_command(command=command_id, target=target)
 
-    # Here I should do two steps:
-    # 1. return the results to the frontend
-    # 2. save the results to the database for historical analysis and visualization in the frontend
-
-    # Fire-and-forget DB save without blocking the response to the frontend
-    print(f"Submitting edge results to executor for database ingestion: {edge_results}")
-    _executor.submit(ingest_edge_results, db_service=current_app.config.get("DB_SERVICE"), dt_factory=current_app.config.get("DT_FACTORY"), edge_results=edge_results, submitter=operator_id, command=command_id)
-    return jsonify(edge_results), 200
+    if edge_results:
+        ingestion_queue = current_app.config.get("INGESTION_QUEUE")
+        ingestion_queue.put(PrioritizedItem(priority=1, item={"edge_results": edge_results, "command_id": command_id, "operator_id": operator_id, "target": target}))
+        return jsonify(edge_results), 200
+    else:
+        return jsonify({"status": "error", "message": "Failed to send command to edge devices"}), 502        
+    
 
 def register_operator_routes(app):
     app.register_blueprint(bp_operator)
