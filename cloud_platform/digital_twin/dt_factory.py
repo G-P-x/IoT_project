@@ -516,8 +516,7 @@ class DTFactory:
                     # Validate that the service can be imported and instantiated
                     service_module = __import__(module_name, fromlist=[service_name])
                     service_class = getattr(service_module, service_name)
-                    _ = service_class()  # smoke test instantiation
-                    self._registered_services[service_name] = service_class  # cache the class for later use
+                    self._registered_services[service_name] = service_class()  # cache the instantiated object for later use
         except Exception as e:
             raise Exception(f"Failed to add service: {str(e)}")
         
@@ -529,7 +528,7 @@ class DTFactory:
             A list of service instances created from the classes cached in
             ``self._registered_services``.
         """
-        return [service_class() for service_class in self._registered_services.values()]
+        return [service_object for service_object in self._registered_services.values()]
 
     def add_service(self, dt_id: str, service_name: str, service_config: Dict = {}) -> None:
         """
@@ -580,7 +579,7 @@ class DTFactory:
                     "$set": {"metadata.updated_at": datetime.now().isoformat()},
                 },
             )
-            self._registered_services[service_name] = service_class  # cache the class for later use
+            self._registered_services[service_name] = service_class()  # cache the class for later use
         except Exception as e:
             raise Exception(f"Failed to add service: {str(e)}")
 
