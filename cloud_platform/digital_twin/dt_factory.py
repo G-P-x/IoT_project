@@ -112,7 +112,7 @@ class DTFactory:
         self.db_service = db_service
         self.schema_registry = schema_registry
         self.dt_id = None # unique identifier of the DT document in MongoDB (set after creation -- create_dt() -- or after reconstitution -- create_dt_from_data())
-        self._registered_services = {}  # service_name → service_class (populated dynamically)
+        self._registered_services = {}  # [{class:service_name, config: config, status:active},   ....] 
         self.name = name
 
         # Load the DT YAML schema (similar to DRFactory)
@@ -483,7 +483,7 @@ class DTFactory:
             except Exception as e:
                 raise Exception(f"Failed to update timestamp after adding actuator replicas: {str(e)}")
 
-    def _get_service_module_mapping(self) -> Dict[str, str]:
+    def _get_service_module_mapping(self) -> Dict[str, Dict[str, Any]]:
         """
         Return the mapping of service class names to their Python module paths.
 
@@ -507,16 +507,28 @@ class DTFactory:
             if not dt:
                 raise ValueError(f"Digital Twin not found: {dt_id}")
             for service in dt.get("services", []):
-                service_name = service.get("name")
+
+                service_name = str(service.get("name")) # used to resolve the class
                 if service_name not in __class__.IMPLEMENTED_SERVICES:
                     continue
-                else:
-                    module_name = __class__.IMPLEMENTED_SERVICES[service_name]
+
+                service_state = str(service.get("status")).lower()
+                if service_state != "active":
+                    logger.info(f"inactive state detected:{service_name}")
+                    continue
                 
-                    # Validate that the service can be imported and instantiated
-                    service_module = __import__(module_name, fromlist=[service_name])
-                    service_class = getattr(service_module, service_name)
-                    self._registered_services[service_name] = service_class()  # cache the instantiated object for later use
+                service_config = dict(service.get("config")) # used to initialize the object
+
+
+                module_name = __class__.IMPLEMENTED_SERVICES[service_name]
+
+                # Validate that the service can be imported and instantiated
+                service_module = __import__(module_name, fromlist=[service_name])
+                service_class = getattr(service_module, service_name)
+
+                # finally add it to the _registered_services list
+                self._registered_services[service_name] = {"class" : service_class, "config": service_config}
+
         except Exception as e:
             raise Exception(f"Failed to add service: {str(e)}")
         
@@ -528,7 +540,13 @@ class DTFactory:
             A list of service instances created from the classes cached in
             ``self._registered_services``.
         """
-        return [service_object for service_object in self._registered_services.values()]
+        temp = []
+        for service in self._registered_services.values():
+            class_ref = service.get("class")
+            configuration = service.get("config")
+            obj = class_ref(config = configuration)
+            temp.append(obj)
+        return temp
 
     def add_service(self, dt_id: str, service_name: str, service_config: Dict = {}) -> None:
         """
@@ -579,7 +597,7 @@ class DTFactory:
                     "$set": {"metadata.updated_at": datetime.now().isoformat()},
                 },
             )
-            self._registered_services[service_name] = service_class()  # cache the class for later use
+            self._registered_services[service_name] = service_class  # cache the class for later use
         except Exception as e:
             raise Exception(f"Failed to add service: {str(e)}")
 
