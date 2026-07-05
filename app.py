@@ -6,6 +6,7 @@ import logging
 import threading
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from pyngrok import ngrok
+import os
 
 from cloud_platform.application.operator_api import register_operator_routes
 from cloud_platform.application import client_http
@@ -155,8 +156,18 @@ class FlaskServer:
         # ── 3. DT Factory ────────────────────────────────────────────
         # The factory manages the lifecycle of DT documents in MongoDB and
         # can reconstitute live DigitalTwin objects on demand.
-        dt_factory = DTFactory(db_service, schema_registry)
-        dt_factory.create_dt() # create the DT entry if it doesn't exist
+        dt_factory = DTFactory(
+            name="etna", 
+            db_service=db_service, 
+            schema_registry=schema_registry,#C:\Users\giovanni\Desktop\IoT_Project\IoT_project\app.py
+            dt_schema_path=os.path.join(
+                os.getcwd(),
+                "cloud_platform", 
+                "virtualization", 
+                "templates", 
+                "digital_twin.yaml")
+                )
+        # dt_factory.create_dt() # create the DT entry if it doesn't exist
 
         # ── 4. Create the shared thread-safe queue
         ingestion_queue = queue.Queue()
@@ -428,7 +439,6 @@ if __name__ == "__main__":
 
     service_worker = ServiceWorker(
         service_queue = server.app.config.get("SERVICE_QUEUE"),
-        db_service = server.app.config.get("DB_SERVICE"),
         dt_factory = server.app.config.get("DT_FACTORY")
     )
     service_worker.start()

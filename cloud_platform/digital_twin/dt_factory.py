@@ -108,11 +108,12 @@ class DTFactory:
         "AlertingService": "cloud_platform.services.analytics",
     }
 
-    def __init__(self, db_service: DatabaseService, schema_registry: SchemaRegistry, dt_schema_path: str = None):
+    def __init__(self, name: str, db_service: DatabaseService, schema_registry: SchemaRegistry, dt_schema_path: str = None):
         self.db_service = db_service
         self.schema_registry = schema_registry
         self.dt_id = None # unique identifier of the DT document in MongoDB (set after creation -- create_dt() -- or after reconstitution -- create_dt_from_data())
         self._registered_services = {}  # service_name → service_class (populated dynamically)
+        self.name = name
 
         # Load the DT YAML schema (similar to DRFactory)
         if dt_schema_path is None:
@@ -125,6 +126,9 @@ class DTFactory:
         
         # Ensure the DT collection exists with proper indexes
         self._init_dt_collection()
+        self.create_dt()
+        self._init_dt_services()
+
 
     # ── Schema loading ────────────────────────────────────────────────
 
@@ -260,7 +264,7 @@ class DTFactory:
 
     # ── DT CRUD ───────────────────────────────────────────────────────
 
-    def create_dt(self, name: str = None, description: str = None, initial_data: Dict[str, Any] = None) -> str:
+    def create_dt(self, description: str = None, initial_data: Dict[str, Any] = None) -> str:
         """
         Create a new Digital Twin manifest in MongoDB using YAML schema-based validation.
         If a DT with the same unique `name` already exists, return its _id instead of creating a duplicate.
@@ -310,8 +314,8 @@ class DTFactory:
         if initial_data is None:
             initial_data = {}
         
-        if name is not None:
-            initial_data["name"] = name
+        if self.name is not None:
+            initial_data["name"] = self.name
         if description is not None:
             initial_data["description"] = description
 
@@ -435,10 +439,6 @@ class DTFactory:
                 )
             except Exception as e:
                 raise Exception(f"Failed to update timestamp after adding Digital Replicas: {str(e)}")    
-
-           
-    # ── Service management ────────────────────────────────────────────
-
     
     def add_actuator_replicas(self, dt_id: str, actuators: List[dict]) -> None:
         '''
@@ -493,6 +493,34 @@ class DTFactory:
         """
         return self._registered_services
 
+    # ── Service management ────────────────────────────────────────────
+    def _init_dt_services(self):
+        '''
+        Look at the dt services in the DT manifest and load them in the cache memory for quicker access
+        '''
+        try:
+            dt_collection = self.db_service.db["digital_twins"]
+
+            dt = dt_collection.find_one(
+                {"_id": self.dt_id},
+            )
+            if not dt:
+                raise ValueError(f"Digital Twin not found: {dt_id}")
+            for service in dt.get("services", []):
+                service_name = service.get("name")
+                if service_name not in __class__.IMPLEMENTED_SERVICES:
+                    continue
+                else:
+                    module_name = __class__.IMPLEMENTED_SERVICES[service_name]
+                
+                    # Validate that the service can be imported and instantiated
+                    service_module = __import__(module_name, fromlist=[service_name])
+                    service_class = getattr(service_module, service_name)
+                    _ = service_class()  # smoke test instantiation
+                    self._registered_services[service_name] = service_class  # cache the class for later use
+        except Exception as e:
+            raise Exception(f"Failed to add service: {str(e)}")
+        
     def get_services(self) -> List[Any]:
         """
         Instantiate the service classes currently registered in this factory.
@@ -502,7 +530,6 @@ class DTFactory:
             ``self._registered_services``.
         """
         return [service_class() for service_class in self._registered_services.values()]
-
 
     def add_service(self, dt_id: str, service_name: str, service_config: Dict = {}) -> None:
         """
