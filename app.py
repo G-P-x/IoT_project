@@ -6,10 +6,16 @@ import logging
 import threading
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from pyngrok import ngrok
+import os
 
 from cloud_platform.application.operator_api import register_operator_routes
 from cloud_platform.application import client_http
 from cloud_platform.telegram_bot.routes.webhook_routes import init_routes
+
+# - Queue imports
+import time
+import queue
+from cloud_platform.types.edge import PrioritizedItem, ServiceQueueItem
 
 # ── DT Architecture imports ───────────────────────────────────────────
 # These follow the same layered structure as the lecture:
@@ -22,6 +28,7 @@ from config.config_loader import ConfigLoader
 from cloud_platform.services.data_ingestion import ingest_edge_results
 
 logger = logging.getLogger(__name__)
+import threading
 
 class TelegramBot:
     def __init__(self, cfg: Config):
@@ -132,6 +139,8 @@ class FlaskServer:
         schema_registry.load_schema("actuator", "cloud_platform/virtualization/templates/actuator.yaml")
         schema_registry.load_schema("digital_twin", "cloud_platform/virtualization/templates/digital_twin.yaml")
 
+
+
         # ── 2. Database Service ───────────────────────────────────────
         # Load MongoDB connection details from config/database.yaml
         db_config = ConfigLoader.load_database_config()
@@ -147,13 +156,31 @@ class FlaskServer:
         # ── 3. DT Factory ────────────────────────────────────────────
         # The factory manages the lifecycle of DT documents in MongoDB and
         # can reconstitute live DigitalTwin objects on demand.
-        dt_factory = DTFactory(db_service, schema_registry)
-        dt_factory.create_dt() # create the DT entry if it doesn't exist
+        dt_factory = DTFactory(
+            name="etna", 
+            db_service=db_service, 
+            schema_registry=schema_registry,#C:\Users\giovanni\Desktop\IoT_Project\IoT_project\app.py
+            dt_schema_path=os.path.join(
+                os.getcwd(),
+                "cloud_platform", 
+                "virtualization", 
+                "templates", 
+                "digital_twin.yaml")
+                )
+        # dt_factory.create_dt() # create the DT entry if it doesn't exist
 
-        # ── 4. Store in app.config for Blueprint access ──────────────
+        # ── 4. Create the shared thread-safe queue
+        ingestion_queue = queue.Queue()
+
+        # ── 5. Create the service queue
+        service_queue = queue.Queue()
+
+        # ── 6. Store in app.config for Blueprint access ──────────────
         self.app.config["SCHEMA_REGISTRY"] = schema_registry
         self.app.config["DB_SERVICE"] = db_service
         self.app.config["DT_FACTORY"] = dt_factory
+        self.app.config["INGESTION_QUEUE"] = ingestion_queue # it is a thread-safe queue for ingestion tasks, accessible by all Blueprints (useful for the operator API to enqueue ingestion tasks for the GatewayPoller)
+        self.app.config["SERVICE_QUEUE"] = service_queue # it is a thread-safe queue for service tasks, accessible by all Blueprints
 
     def _register_blueprints(self, telegram_application=None):
         # Existing routes
@@ -190,12 +217,71 @@ class FlaskServer:
                     if loop_thread:
                         loop_thread.join()
 
-
-class GatewayPoller:
-    def __init__(self, db_service: DatabaseService, dt_factory: DTFactory, poll_interval_s: int):
+class IngestionWorker:
+    '''
+    This class encapsulates the ingestion worker that runs in a separate thread.
+    It continuously listens to the ingestion queue for new edge results and processes them. 
+    Finally, it puts the digested data into the service_queue for the services to consume.
+    
+    The item in the queue is expected to be a PrioritizedItem with the following structure:
+    PrioritizedItem(
+        priority=1, 
+        item={
+            "edge_results": EdgeResults,
+            "command_id": str | None,
+            "operator_id": str | None,
+        }
+    )
+    '''
+    def __init__(self, db_service, dt_factory, ingestion_queue: queue.PriorityQueue, service_queue: queue.Queue):
         self.db_service = db_service
         self.dt_factory = dt_factory
-        self.poll_interval_s = 5 # max(poll_interval_ms, 1000) / 1000.0
+        self.ingestion_queue = ingestion_queue
+        self.service_queue = service_queue
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self):
+        self._thread.start()
+
+    def stop(self):
+        # Push a dummy item with the highest priority (0) to unblock and kill the thread
+        self.ingestion_queue.put(PrioritizedItem(priority=0, item="STOP"))
+        self._thread.join(timeout=5)
+
+    def _run(self):
+        logger.info("Ingestion Worker started.")
+        while not self._stop_event.is_set():
+            try:
+                # This blocks until an item arrives!
+                task = self.ingestion_queue.get() # get the next item from the queue
+
+                if task is None:
+                    continue
+
+                if task.item == "STOP":
+                    self._stop_event.set()
+                    self.ingestion_queue.task_done()
+                    break
+                
+                dt_data = ingest_edge_results(
+                    self.db_service, 
+                    task.item.get("edge_results"), 
+                    self.dt_factory, 
+                    submitter=task.item.get("operator_id"), 
+                    command=task.item.get("command_id")
+                )
+                
+                self.ingestion_queue.task_done()
+
+                self.service_queue.put(ServiceQueueItem(command_id="RUN SERVICE", dt_data=dt_data))
+            except Exception as exc:
+                logger.exception("Ingestion failed: %s", exc)
+
+class GatewayPoller:
+    def __init__(self, poll_interval_s: int, ingestion_queue: queue.Queue):
+        self.poll_interval_s = poll_interval_s
+        self.ingestion_queue = ingestion_queue
         self._stop_event = threading.Event()
         self._exception = None
         self._thread = threading.Thread(target=self._run_thread, daemon=True)
@@ -222,36 +308,145 @@ class GatewayPoller:
             try:
                 results = client_http.poll_gateways()
                 # logger.info("\n\nGateway polling results: %s\n\n", results)
-                ingest_edge_results(self.db_service, results, self.dt_factory, submitter=None, command=None)
+                if results:
+                    self.ingestion_queue.put(PrioritizedItem(priority=2, 
+                                                             item={ "edge_results": results,
+                                                                   "command_id": None,
+                                                                   "operator_id": None })) # IngestionWorker will handle the ingestion of the results
+
             except Exception as exc:
                 logger.exception("Gateway polling failed: %s", exc)
 
             self._stop_event.wait(self.poll_interval_s)
 
+class ServiceWorker:
+    """
+    This class encapsulates the service worker that runs in a separate thread.
+    It continuously listens to the service queue for new tasks and processes them.
+    """
+    def __init__(self, service_queue: queue.Queue, dt_factory=None):
+        self.service_queue = service_queue
+        self.dt_factory = dt_factory
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
 
-def _get_db_service(server: FlaskServer) -> DatabaseService:
-    db_service = server.app.config.get("DB_SERVICE")
-    if not db_service:
-        raise RuntimeError("DB_SERVICE not initialized on Flask app")
-    return db_service
+    def start(self):
+        self._thread.start()
+
+    def stop(self):
+        # Push a dummy item to unblock and kill the thread
+        self.service_queue.put(ServiceQueueItem(command_id="STOP", dt_data=[]))
+        self._thread.join(timeout=5)
+
+    def _run(self):
+        logger.info("Service Worker started.")
+        while not self._stop_event.is_set():
+            try:
+                task = self.service_queue.get()  # get the next item from the queue
+
+                if task is None:
+                    continue
+
+                if task.command_id == "STOP":
+                    self._stop_event.set()
+                    self.service_queue.task_done()
+                    break
+
+                # Process the service task
+                self.process_service_task(task)
+
+                # Used by Queue consumer threads. For each get() used to fetch a task,
+                # a subsequent call to task_done() tells the queue that the processing
+                # on the task is complete.
+                self.service_queue.task_done()
+            except Exception as exc:
+                logger.exception("Service processing failed: %s", exc)
+
+    def process_service_task(self, task):
+        """
+        Implement the logic to process the service task.
+        
+        Args:
+            task (ServiceQueueItem): The service task to process.
+                dt_data : 
+                    common structure for all devices, regardless of type:{
+                        "_id_document": dr_entry["_id"],
+                        "dr_type": dr_type,
+                        "device_id": device_id,
+                        "device_type": device_type,
+                    }
+
+                    sensor-specific structure (only if dr_type == "sensor"): {
+                        "current_value": 25.0 °C,  # current reading of the sensor
+                        "threshold": 32.0 °C,      # threshold value for alerting
+                        "alert_level": str,        # "critical" or "info"
+                    }
+
+                command_id: str | None,  # command_id of the command that generated this result
+        """
+        ### Get the list of services / instantieted objects from DT manifest and execute them 
+        dt_services = self.dt_factory.get_services()
+        for service in dt_services:
+            try:
+                result = service.execute(task.dt_data)
+                result = dict(result)
+                # mandatory = ["serivce","status","message"]
+                # if mandatory not in result.keys():
+                #     raise AttributeError(f"result of execution of service {service.__name__} misses {mandatory}")
+                logger.info(f"service: {result.get("service")} -- message: {result.get("message")}\n\n\n")
+                # for key, val in result.items():
+                #     print(f"{key}: {val}\n"\
+                #                 f"{key}: {val}\n"\
+                #                 f"{key}\n{val}")
+
+            except Exception as exc:
+                logger.exception("Service %s execution failed: %s", service.__class__.__name__, exc)
+
+        
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
     logging.getLogger().setLevel(logging.INFO)
     cfg = Config()
+
     telegram_bot = None
     if cfg.TELEGRAM_BOT_TOKEN:
         telegram_bot = TelegramBot(cfg)
     else:
         logger.warning("TELEGRAM_BOT_TOKEN missing; skipping Telegram bot startup.")
 
+    # Start the Flask server and initialize the database, DT factory, and ingestion queue
     server = FlaskServer(
         cfg,
         telegram_application=telegram_bot.application if telegram_bot else None,
     )
-
-    poller = GatewayPoller(_get_db_service(server), server.app.config.get("DT_FACTORY"), cfg.POLLING_INTERVAL_MS)
+    if not server.app.config.get("DB_SERVICE"):
+        raise RuntimeError("DB_SERVICE not initialized on Flask app")
+    if not server.app.config.get("DT_FACTORY"):
+        raise RuntimeError("DT_FACTORY not initialized on Flask app")
+    if not server.app.config.get("INGESTION_QUEUE"):
+        raise RuntimeError("INGESTION_QUEUE not initialized on Flask app")
+    
+    ingestion_worker = IngestionWorker(
+        db_service=server.app.config.get("DB_SERVICE"),
+        dt_factory=server.app.config.get("DT_FACTORY"),
+        ingestion_queue=server.app.config.get("INGESTION_QUEUE"),
+        service_queue=server.app.config.get("SERVICE_QUEUE")
+    )
+    ingestion_worker.start()
+    
+    poller = GatewayPoller(
+        poll_interval_s = cfg.POLLING_INTERVAL_S, 
+        ingestion_queue = server.app.config.get("INGESTION_QUEUE")
+    )
     poller.start()
+
+    service_worker = ServiceWorker(
+        service_queue = server.app.config.get("SERVICE_QUEUE"),
+        dt_factory = server.app.config.get("DT_FACTORY")
+    )
+    service_worker.start()
+
     try:
         server.run(
             host=cfg.FLASK_HOST,
@@ -260,5 +455,7 @@ if __name__ == "__main__":
             application=telegram_bot.application if telegram_bot else None,
         )
     finally:
+        logger.info("\n\nShutting down workers...")
         poller.stop()
-        pass
+        ingestion_worker.stop()
+        service_worker.stop()

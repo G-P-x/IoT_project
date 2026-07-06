@@ -205,9 +205,9 @@ def _create_dt_data_entry(dr_entry: Dict, record: Dict, alert_level: str) -> dic
         record: The latest record dict from the edge results.
         alert_level: The alert level string ("normal", "warning", "critical").
     '''
-    dr_type = dr_entry.get("dr_type")
-    device_type = record.get("type")  # e.g., "sensor", "actuator", "gateway"
-    device_id = dr_entry.get("profile", {}).get("device_id")
+    dr_type = dr_entry.get("dr_type") # e.g., "sensor", "actuator", "gateway"
+    device_id = dr_entry.get("profile").get("device_id")
+    device_type = dr_entry.get("profile").get("device_id", "").split("-")[1] if "-" in dr_entry.get("profile").get("device_id", "") else None
 
     if dr_type is None:
         logger.warning("Missing dr_type for DR '%s'", dr_entry.get("_id"))
@@ -256,7 +256,7 @@ def _set_alert_level(value: float, threshold: float) -> str:
     else:
         return "normal"
 
-def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, DeviceResult], dt_factory: DTFactory, submitter: str | None, command: str | None) -> Dict:
+def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, DeviceResult], dt_factory: DTFactory, submitter: str | None, command: str | None):
     """
     Process the full edge_results dict returned by send_command_to_all_devices() and poll_gateways()
     and persist every successful sensor reading into the corresponding DRs.
@@ -269,13 +269,7 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
         command:        The command string if this ingestion is triggered by an operator command, else None.
 
     Returns:
-        A summary dict:
-        {
-            "ingested": <int>,      # number of measurements stored
-            "skipped":  <int>,      # records skipped (ERROR status, null value, etc.)
-            "errors":   [<str>],    # any processing errors
-            "details":  [ ... ],    # per-record detail
-        }
+        Current DT manifest
     """
     try:
         # validate edge_results structure with Pydantic, technically it is already validated in the client_http before returning the response.
@@ -287,7 +281,7 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
 
     for gateway_id, gtw_data in edge_results.items(): # gateway_id, data: DeviceResult
         assert isinstance(gtw_data, dict), f"Expected dict for device result, got {type(gtw_data)}"
-        logger.info("Ingesting edge results from submitter '%s' with command '%s'", submitter, command)
+
         # phase 1: create a history record for the gateway with status "inactive" and source "operator" or "telemetry" based on the submitter
         history_entry = _create_gateway_record(gateway_id, gtw_data.get("gateway_info", {}), sub = submitter) # create a history record for the gateway, both in case of success and failure
         db_service.save_history_event(history_entry)
@@ -296,7 +290,7 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
         ################## ----- First case: gateway-level failure (e.g. no response) ----- ##################
 
         if gtw_data.get("gateway_info", {}).get("status") != "success":
-            logger.info("Processing gateway-level failure for device '%s'", gateway_id)
+
             # phase 2: find or create the gateway DR and set its status to "inactive" (if it already exists, just update the status and last_update timestamp, if it doesn't exist, create it with the status "inactive" and no sensors/actuators)
             dr_entry = _find_dr(db_service, gateway_id) # find an existing gateway DR by device_id (by default it searches in the "device" collection)
 
@@ -319,8 +313,7 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
 
         ################## ----- Second case: gateway-level success ----- ##################
 
-        logger.info("Processing gateway-level success for device '%s'", gateway_id)
-        logger.info("Edge results: %s", gtw_data)
+
         sensors = []
         actuators = []
         dt_sensors = []
@@ -333,7 +326,6 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
         
         for device_id, device_data in gtw_data.get("records", {}).items():
             try:
-                logger.info("Processing device '%s' in gateway '%s'", device_id, gateway_id)
                 device_data = dict(device_data)  # Ensure device_data is a dict
 
                 # create a history entry and DR entry for the sensor record
@@ -435,8 +427,7 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
         # dt_factory.add_digital_replicas(dt_factory.dt_id, digital_replicas)
         # dt_factory.add_sensor_replicas(dt_factory.dt_id, dt_sensors)
         dt_factory.add_digital_replicas(dt_factory.dt_id, DT_dr_replicas)
+        DT_data = dt_factory.get_dt(dt_factory.dt_id)
 
-        #### 
-        # now all the sensors and actuators have been processed, and the gateway DR has been updated with the new sensors/actuators and status, and the digital twin has been updated with the new digital replicas.
-        # I can run the services and save the results in the database,
+        return DT_data
 

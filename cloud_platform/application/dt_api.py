@@ -109,6 +109,18 @@ def add_service_to_dt(dt_id):
     except Exception as e:
         return jsonify({"error": str(e)}), 500
 
+@dt_api.route("/<dt_id>/services/<service_name>", methods=["DELETE"])
+def remove_service_from_dt(dt_id, service_name):
+    """
+    Detach a service from a Digital Twin.
+
+    This endpoint allows the removal of a service from the DT's manifest.
+    """
+    try:
+        current_app.config["DT_FACTORY"].remove_service(dt_id, service_name)
+        return jsonify({"status": "success", "message": f"Service '{service_name}' removed"}), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 # ==========================================================================
 # Digital Replica endpoints  (/api/dr)

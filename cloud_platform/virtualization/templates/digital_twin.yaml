@@ -15,7 +15,11 @@ schemas:
       created_at: datetime             # Creazione del contenitore Digital Twin
       updated_at: datetime             # Ultimo aggiornamento di QUALSIASI componente
       status: str                      # Stato globale (es. "ok", "warning", "offline") 
-    services: List[str]                # Lista degli ID dei servizi associati al Twin 
+    services:               # Lista degli ID dei servizi associati al Twin 
+      - name: str                        # Nome del servizio (es. "temperature_monitoring")
+        config: Dict                     # Configurazione del servizio (es. "Monitora la temperatura")
+        status: str                      # Stato del servizio (es. "running", "stopped", "error")
+        added_at: datetime | None        # Timestamp dell'ultima esecuzione del servizio
     sensors:                  # lista dei digital replica associati al twin
       - _id_document: str              # ID univoco del DR
         dr_type: str                   # DR type identifier (es. "sensor")

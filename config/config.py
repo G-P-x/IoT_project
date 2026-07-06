@@ -26,8 +26,8 @@ class Config:
     #     EDGE_DEVICES = {}
 
     POLL_ENDPOINT = os.getenv("POLL_ENDPOINT", "/data")
-    # HTTP Polling interval (ms)
-    POLLING_INTERVAL_MS = int(os.getenv("POLLING_INTERVAL_MS", "5000"))
+    # HTTP Polling interval (seconds)
+    POLLING_INTERVAL_S = int(5)  # Default to 5 seconds
 
     COMMAND_ENDPOINT = os.getenv("COMMAND_ENDPOINT", "/command")
 
