@@ -269,13 +269,7 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
         command:        The command string if this ingestion is triggered by an operator command, else None.
 
     Returns:
-        A summary dict:
-        {
-            "ingested": <int>,      # number of measurements stored
-            "skipped":  <int>,      # records skipped (ERROR status, null value, etc.)
-            "errors":   [<str>],    # any processing errors
-            "details":  [ ... ],    # per-record detail
-        }
+        Current DT manifest
     """
     try:
         # validate edge_results structure with Pydantic, technically it is already validated in the client_http before returning the response.
@@ -433,6 +427,7 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
         # dt_factory.add_digital_replicas(dt_factory.dt_id, digital_replicas)
         # dt_factory.add_sensor_replicas(dt_factory.dt_id, dt_sensors)
         dt_factory.add_digital_replicas(dt_factory.dt_id, DT_dr_replicas)
+        DT_data = dt_factory.get_dt(dt_factory.dt_id)
 
-        return DT_dr_replicas
+        return DT_data
 

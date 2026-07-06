@@ -389,7 +389,16 @@ class ServiceWorker:
         for service in dt_services:
             try:
                 result = service.execute(task.dt_data)
-                logger.info("Service executed successfully with result: %s", result)
+                result = dict(result)
+                # mandatory = ["serivce","status","message"]
+                # if mandatory not in result.keys():
+                #     raise AttributeError(f"result of execution of service {service.__name__} misses {mandatory}")
+                logger.info(f"service: {result.get("service")} -- message: {result.get("message")}\n\n\n")
+                # for key, val in result.items():
+                #     print(f"{key}: {val}\n"\
+                #                 f"{key}: {val}\n"\
+                #                 f"{key}\n{val}")
+
             except Exception as exc:
                 logger.exception("Service %s execution failed: %s", service.__class__.__name__, exc)
 

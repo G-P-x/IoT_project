@@ -543,9 +543,13 @@ class DTFactory:
         """
         temp = []
         for service in self._registered_services.values():
-            class_ref = service.get("class")
-            configuration = service.get("config")
-            obj = class_ref(config = configuration)
+            if isinstance(service, dict):
+                class_ref = service.get("class")
+                configuration = service.get("config", {})
+            else:
+                class_ref = service
+                configuration = {}
+            obj = class_ref(config=configuration)
             temp.append(obj)
         return temp
 
@@ -598,7 +602,10 @@ class DTFactory:
                     "$set": {"metadata.updated_at": datetime.now().isoformat()},
                 },
             )
-            self._registered_services[service_name] = service_class  # cache the class for later use
+            self._registered_services[service_name] = {
+                "class": service_class,
+                "config": service_config or {},
+            }
         except Exception as e:
             raise Exception(f"Failed to add service: {str(e)}")
 

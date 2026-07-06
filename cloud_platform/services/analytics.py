@@ -103,17 +103,17 @@ class AggregationService(BaseService):
         
         for device_type, values in grouped.items():
             try:
-                temp_message = f"{device_type}\n"\
-                    f"\tcount: {len(values)}\n"\
-                    f"\tmean: {round(statistics.mean(values), 4)}\n"\
-                    f"\tmin: {min(values)}\n"\
-                    f"\tmax: {max(values)}\n"\
-                    f"\tstddev: {round(statistics.stdev(values), 4) if len(values) > 1 else 0}\n\n"
+                temp_message = f"\n\t{device_type}\n"\
+                    f"\t\tcount: {len(values)}\n"\
+                    f"\t\tmean: {round(statistics.mean(values), 4)}\n"\
+                    f"\t\tmin: {min(values)}\n"\
+                    f"\t\tmax: {max(values)}\n"\
+                    f"\t\tstddev: {round(statistics.stdev(values), 4) if len(values) > 1 else 0}\n\n"
                 output_message += temp_message
             except (statistics.StatisticsError, ValueError) as exc:
-                output_message += f"{device_type}\n"\
-                    f"\tcount: {len(values)}\n"\
-                    f"\terror: {str(exc)}"
+                output_message += f"\n\t{device_type}\n"\
+                    f"\t\tcount: {len(values)}\n"\
+                    f"\t\terror: {str(exc)}"
 
         return output_message
 
@@ -164,7 +164,7 @@ class AggregationService(BaseService):
             status = "error executing the service"
             message = f"unexpected error as occurred:\n\t{e}"
         finally:
-            output = {"service": __class__.__name__, "status": status , "messages":message}
+            output = {"service": __class__.__name__, "status": status , "message":message}
         
         return output 
     
@@ -312,22 +312,21 @@ class AlertingService(BaseService):
                     alert_level = dr.get("alert_level", None)
 
                     if current_value is None or threshold is None or alert_level is None:
+                        continue
                         single_dr_msg += f"\n\n\tdevice ID: {device_id}"\
                             f"\t alert value was impossible to be computed due to missing information from device"                    
                         raise CustomError(message=single_dr_msg)
                     
                     if alert_level == "critical":
                         critical_count += 1
-                        single_dr_msg += f"\n\n\tdevice ID: {device_id}"\
+                        single_dr_msg += f"\n\n\tCRITICAL -- device ID: {device_id}"\
                             f"\t value: {current_value}"\
                             f"\t threshold: {threshold}"
-                        raise CustomError(message=single_dr_msg)
+                        # raise CustomError(message=single_dr_msg)
                         
-                    single_dr_msg += f"\n\n\tdevice ID: {device_id}"\
-                            f"\t value: {current_value}"\
-                            f"\t threshold: {threshold}"
-                except CustomError as e:
-                    single_dr_msg += e.message   
+                    # single_dr_msg += f"\n\n\tdevice ID: {device_id}"\
+                    #         f"\t value: {current_value}"\
+                    #         f"\t threshold: {threshold}"   
                 except AttributeError:
                     logger.warning("Skipping DR with missing device_id.")
                     continue
@@ -403,9 +402,9 @@ if __name__ == "__main__":
                 "_id_document": "13660a38-080b-41d2-9f20-2531c6b56e62",
                 "dr_type": "sensor",
                 "device_id": "DDEEFF00-aq1",
-                "current_value": "None ppm",
+                "current_value": "100 ppm",
                 "threshold": "31.45 ppm",
-                "alert_level": None,
+                "alert_level": "critical",
                 "device_type": "aq1"
             },
             {
