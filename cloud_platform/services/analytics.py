@@ -352,10 +352,22 @@ class AlertingService(BaseService):
  
 class DashboardVisualization(BaseService):
     '''
-    This service read the database and update the operator dashboard continously
+    This service read the database and update the operator dashboard continously with fresh DT reading
     '''
-    def execute(self, dr_data, config = {}):
-        pass
+    def __init__(self, config: Dict = {}):
+        super().__init__(config)
+
+    def execute(self, data):
+        try:
+            check_data_input(data)
+            status = "service executed"
+            message = str(data)
+        except Exception as e:
+            message = e
+        finally:
+            output = {"service": __class__.__name__, "status": status, "message": message}
+
+        return output
 
 if __name__ == "__main__":
 # test AggregationService

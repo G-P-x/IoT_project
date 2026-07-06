@@ -107,6 +107,7 @@ class DTFactory:
     IMPLEMENTED_SERVICES = {
         "AlertingService": "cloud_platform.services.analytics",
         "AggregationService": "cloud_platform.services.analytics",
+        "DashboardVisualization": "cloud_platform.services.analytics",
     }
 
     def __init__(self, name: str, db_service: DatabaseService, schema_registry: SchemaRegistry, dt_schema_path: str = None):
