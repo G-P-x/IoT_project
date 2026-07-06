@@ -106,6 +106,7 @@ class DTFactory:
     ## Keep a static mapping of implemented service names to their module paths for dynamic import
     IMPLEMENTED_SERVICES = {
         "AlertingService": "cloud_platform.services.analytics",
+        "AggregationService": "cloud_platform.services.analytics",
     }
 
     def __init__(self, name: str, db_service: DatabaseService, schema_registry: SchemaRegistry, dt_schema_path: str = None):

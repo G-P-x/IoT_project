@@ -393,11 +393,6 @@ class ServiceWorker:
             except Exception as exc:
                 logger.exception("Service %s execution failed: %s", service.__class__.__name__, exc)
 
-
-        # with open("service_task_log.txt", "a") as f:
-        #     f.write(f"Processing service task with command_id: {task.command_id}\n")
-        #     f.write(f"DT data: {task.dt_data}\n\n")
-
         
 
 if __name__ == "__main__":

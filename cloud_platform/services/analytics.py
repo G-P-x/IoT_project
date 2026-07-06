@@ -14,14 +14,12 @@ Architecture reasoning (from the lecture):
 - In our IoT monitoring domain the measure_type values include 'temperature',
   'air_quality', 'seismic_waves', etc.
 """
-
 import logging
 from typing import Dict, List, Optional
 import statistics
 from cloud_platform.services.base import BaseService
 from cloud_platform.services.database_service import DatabaseService
-
-
+    
 logger = logging.getLogger(__name__)
 
 
@@ -29,22 +27,80 @@ class AggregationService(BaseService):
     """
     Service for aggregating measurements across Digital Replicas.
 
-    Given the DT data (list of DRs), this service:
-        1. Filters DRs by type (optional).
-        2. Collects all measurements, optionally filtering by attribute.
-        3. Groups values by measure_type.
+    Given the DT data this service:
+        1. Filters sensors by device_type (optional).
+        2. Collects all sensors with an actual numeric value.
+        3. Groups numeric values by device_type.
         4. Computes count, mean, min, max, and stddev for each group.
     """
 
-    def execute(self, data: Dict, dr_type: str = None, attribute: str = None) -> Dict:
+    @staticmethod
+    def _parse_sensor_value(raw_value: Optional[str]) -> Optional[float]:
+        if raw_value is None:
+            return None
+
+        if isinstance(raw_value, (int, float)):
+            return float(raw_value)
+
+        if not isinstance(raw_value, str):
+            return None
+
+        normalized = raw_value.strip()
+        if not normalized or normalized.lower() in {"none", "nan", "null"}:
+            return None
+
+        numeric_part = normalized.split()[0]
+        try:
+            return float(numeric_part)
+        except ValueError:
+            return None
+
+    @staticmethod
+    def _aggregate_sensors(sensor_records: List[Dict]) -> Dict:
+        grouped: Dict[str, List[float]] = {}
+
+        for sensor in sensor_records:
+            device_type = sensor.get("device_type") or sensor.get("dr_type") or "unknown"
+            value = AggregationService._parse_sensor_value(sensor.get("current_value"))
+            if value is None:
+                continue
+            grouped.setdefault(device_type, []).append(value)
+
+        if not grouped:
+            return {"error": "No sensors with actual numeric values found."}
+
+        stats: Dict[str, Dict[str, float]] = {}
+        for device_type, values in grouped.items():
+            try:
+                stats[device_type] = {
+                    "count": len(values),
+                    "mean": round(statistics.mean(values), 4),
+                    "min": min(values),
+                    "max": max(values),
+                    "stddev": round(statistics.stdev(values), 4) if len(values) > 1 else 0,
+                }
+            except (statistics.StatisticsError, ValueError) as exc:
+                stats[device_type] = {"error": str(exc), "count": len(values)}
+
+        return stats
+
+    def __init__(self, config: dict = {}):
+        '''
+        Args:
+            config : {
+                    "device_type": str,
+                },
+            
+        '''
+        super().__init__(config)  
+    
+
+    def execute(self, data: Dict) -> Dict:
         """
         Run aggregation on measurements from the DT's Digital Replicas.
 
         Args:
-            data:      Dict containing 'digital_replicas' (list of DR dicts).
-            dr_type:   Optional — only aggregate DRs of this type (e.g. 'sensor').
-            attribute: Optional — only aggregate measurements with this measure_type
-                       (e.g. 'temperature').
+            data:      Dict containing DT data.
 
         Returns:
             A dict mapping each measure_type to its computed statistics, e.g.:
@@ -53,50 +109,25 @@ class AggregationService(BaseService):
                 ...
             }
         """
-        if not data or "digital_replicas" not in data:
-            raise ValueError("Invalid data: missing 'digital_replicas' key")
+        if not data or not isinstance(data, dict):
+            raise ValueError("Invalid data: missing DT")
 
-        # Step 1 — Filter DRs by type if specified
-        drs = [
-            dr for dr in data["digital_replicas"]
-            if dr_type is None or dr.get("type") == dr_type
-        ]
+        sensors = data.get("sensors")
+        if sensors is None:
+            return {"error": "Invalid sensor collection None in input data."}
 
-        if not drs:
-            return {"error": f"No digital replicas found of type '{dr_type}'"}
+        if not isinstance(sensors, list):
+            return {"error": "Invalid sensor collection in input data. It is not a list."}
 
-        # Step 2 — Collect measurements, optionally filtering by attribute
-        all_measurements = []
-        for dr in drs:
-            measurements = dr.get("data", {}).get("measurements", [])
-            if attribute:
-                measurements = [m for m in measurements if m.get("measure_type") == attribute]
-            all_measurements.extend(measurements)
+        if self.config.get("device_type"):
+            sensors = [sensor for sensor in sensors if sensor.get("device_type") == self.config["device_type"]]
 
-        if not all_measurements:
-            return {"error": f"No measurements found for attribute '{attribute}'"}
+        numeric_sensors = [sensor for sensor in sensors if self._parse_sensor_value(sensor.get("current_value")) is not None]
 
-        # Step 3 — Group numeric values by measure_type
-        grouped: Dict[str, list] = {}
-        for m in all_measurements:
-            mtype = m.get("measure_type", "unknown")
-            grouped.setdefault(mtype, []).append(float(m["value"]))
+        if not numeric_sensors:
+            return {"error": "No sensors with actual numeric values found."}
 
-        # Step 4 — Compute statistics per group
-        stats = {}
-        for mtype, values in grouped.items():
-            try:
-                stats[mtype] = {
-                    "count": len(values),
-                    "mean": round(statistics.mean(values), 4),
-                    "min": min(values),
-                    "max": max(values),
-                    "stddev": round(statistics.stdev(values), 4) if len(values) > 1 else 0,
-                }
-            except (statistics.StatisticsError, ValueError) as e:
-                stats[mtype] = {"error": str(e), "count": len(values)}
-
-        return stats
+        return {"service": __class__.__name__, "status": self._aggregate_sensors(numeric_sensors), "messages":"complete"}
     
 class MonitorService(BaseService):
     """
@@ -198,8 +229,6 @@ class MonitorService(BaseService):
 
         return {}
 
-        
-
 class PredictionService(BaseService):
     """
     Service for making predictions based on measurements from Digital Replicas.
@@ -262,4 +291,115 @@ class AlertingService(BaseService):
                 logger.warning(message)
                 return {"service": "alerting", "status": "alert", "message": message}
 
-        return {"service": "alerting", "status": "ok", "message": "No critical alerts found."}
+        return {"service": self.__name__, "status": "ok", "message": "No critical alerts found."}
+ 
+class DashboardVisualization(BaseService):
+    '''
+    This service read the database and update the operator dashboard continously
+    '''
+    def execute(self, dr_data, config = {}):
+        pass
+
+if __name__ == "__main__":
+# test AggregationService
+    data = {
+        "_id": "c5500d1e-c911-4e90-8dd4-250d04e9fd05",
+        "digital_replicas": [],
+        "services": [
+            {
+                "name": "AlertingService",
+                "config": {},
+                "status": "active",
+                "added_at": "2026-07-05T11:11:07.175667"
+            }
+        ],
+        "metadata": {
+            "created_at": {
+                "$date": "2026-07-02T10:15:21.111Z"
+            },
+            "updated_at": "2026-07-05T09:31:25.399636+00:00",
+            "status": "OK"
+        },
+        "name": "etna",
+        "description": "default",
+        "sensors": [
+            {
+                "_id_document": "f04b8c23-608f-457d-9c05-664b41faf40e",
+                "dr_type": "sensor",
+                "device_id": "AABBCCDD-t1",
+                "current_value": "25 °C",
+                "threshold": "85.71 °C",
+                "alert_level": "normal",
+                "device_type": "t1"
+            },
+            {
+                "_id_document": "8c3d3106-4d33-47d1-8122-47192a2eb5e2",
+                "dr_type": "sensor",
+                "device_id": "BBCCDDEE-t1",
+                "current_value": "28 °C",
+                "threshold": "74.39 °C",
+                "alert_level": "normal",
+                "device_type": "t1"
+            },
+            {
+                "_id_document": "13660a38-080b-41d2-9f20-2531c6b56e62",
+                "dr_type": "sensor",
+                "device_id": "DDEEFF00-aq1",
+                "current_value": "None ppm",
+                "threshold": "31.45 ppm",
+                "alert_level": None,
+                "device_type": "aq1"
+            },
+            {
+                "_id_document": "71bace25-daf3-48f5-8cc9-c83edcc294e8",
+                "dr_type": "sensor",
+                "device_id": "FF001122-s1",
+                "current_value": "26.39 m/s",
+                "threshold": "66.71 m/s",
+                "alert_level": "normal",
+                "device_type": "s1"
+            },
+            {
+                "_id_document": "e0a244f2-8316-4cf5-ba41-e632e1ff8a53",
+                "dr_type": "sensor",
+                "device_id": "CCDDEEFF-t2",
+                "current_value": "None °C",
+                "threshold": "22.31 °C",
+                "alert_level": None,
+                "device_type": "t2"
+            },
+            {
+                "_id_document": "6bb1753b-c407-44c4-a743-cb1a838eb7b7",
+                "dr_type": "sensor",
+                "device_id": "EEFF0011-t3",
+                "current_value": "56.45 °C",
+                "threshold": "83.81 °C",
+                "alert_level": "normal",
+                "device_type": "t3"
+            },
+            {
+                "_id_document": "c0b19bea-dccf-4f0c-82cc-badefb957a35",
+                "dr_type": "sensor",
+                "device_id": "00112233-t2",
+                "current_value": "None °C",
+                "threshold": "50.68 °C",
+                "alert_level": None,
+                "device_type": "t2"
+            },
+            {
+                "_id_document": "9e0650fc-9e75-4016-9d99-7d7c9cf37dc7",
+                "dr_type": "sensor",
+                "device_id": "22334455-aq2",
+                "current_value": "None ppb",
+                "threshold": "42.53 ppb",
+                "alert_level": None,
+                "device_type": "aq2"
+            }
+        ],
+        "actuators": []
+    }
+    config ={}
+    ags = AggregationService(config=config)
+    stats = ags.execute(data)
+    for key, value in stats.items():
+        print(f"{key}: {value}")

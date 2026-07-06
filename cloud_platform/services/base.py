@@ -29,11 +29,12 @@ class BaseService(ABC):
     contains a 'digital_replicas' key with the full list of DR dicts.
     """
 
-    def __init__(self):
+    def __init__(self, config:dict = {}):
         # Automatically derive the service name from the class name.
         # This avoids boilerplate in every subclass and keeps the naming
         # consistent across the system.
         self.name = self.__class__.__name__
+        self.config = config
 
     @abstractmethod
     def execute(self, *args, **kwargs) -> Any:
