@@ -236,7 +236,7 @@ class IngestionWorker:
     def __init__(self, db_service, dt_factory, ingestion_queue: queue.PriorityQueue, service_queue: queue.Queue):
         self.db_service = db_service
         self.dt_factory = dt_factory
-        self.queue = ingestion_queue
+        self.ingestion_queue = ingestion_queue
         self.service_queue = service_queue
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -246,7 +246,7 @@ class IngestionWorker:
 
     def stop(self):
         # Push a dummy item with the highest priority (0) to unblock and kill the thread
-        self.queue.put(PrioritizedItem(priority=0, item="STOP"))
+        self.ingestion_queue.put(PrioritizedItem(priority=0, item="STOP"))
         self._thread.join(timeout=5)
 
     def _run(self):
@@ -254,14 +254,14 @@ class IngestionWorker:
         while not self._stop_event.is_set():
             try:
                 # This blocks until an item arrives!
-                task = self.queue.get() # get the next item from the queue
+                task = self.ingestion_queue.get() # get the next item from the queue
 
                 if task is None:
                     continue
 
                 if task.item == "STOP":
                     self._stop_event.set()
-                    self.queue.task_done()
+                    self.ingestion_queue.task_done()
                     break
                 
                 dt_data = ingest_edge_results(
@@ -272,7 +272,7 @@ class IngestionWorker:
                     command=task.item.get("command_id")
                 )
                 
-                self.queue.task_done()
+                self.ingestion_queue.task_done()
 
                 self.service_queue.put(ServiceQueueItem(command_id="RUN SERVICE", dt_data=dt_data))
             except Exception as exc:
