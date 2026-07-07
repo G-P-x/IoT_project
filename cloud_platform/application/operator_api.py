@@ -2,12 +2,11 @@ from flask import Blueprint, current_app, jsonify, request
 from flask import render_template
 from cloud_platform.types.edge import EdgeResults, DeviceResult
 from cloud_platform.application import client_http
-from cloud_platform.services.data_ingestion import ingest_edge_results
 from pydantic import BaseModel, ValidationError
 from typing import Literal
 
 ## ThreadPoolExecutor for background ingestion tasks
-from cloud_platform.types.edge import PrioritizedItem
+from cloud_platform.types.queues import IngestionQueueItem, DispatchQueueItem
 # ── Imports for Mock data for testing (delete in production) ──────────────────────────────────
 from datetime import datetime, timedelta
 import random
@@ -223,7 +222,7 @@ def send():
 
     if edge_results:
         ingestion_queue = current_app.config.get("INGESTION_QUEUE")
-        ingestion_queue.put(PrioritizedItem(priority=1, item={"edge_results": edge_results, "command_id": command_id, "operator_id": operator_id, "target": target}))
+        ingestion_queue.put(IngestionQueueItem(priority=1, item={"edge_results": edge_results, "command_id": command_id, "operator_id": operator_id, "target": target}))
         return jsonify(edge_results), 200
     else:
         return jsonify({"status": "error", "message": "Failed to send command to edge devices"}), 502        

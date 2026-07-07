@@ -17,12 +17,13 @@ Architecture reasoning (from the lecture):
 import logging
 from typing import Dict, List, Optional
 import statistics
+from cloud_platform.types.edge import ServiceResult
+from cloud_platform.services.base import BaseService
+from cloud_platform.services.base import BaseService
+from cloud_platform.services.database_service import DatabaseService
 
-if __name__ == "__main__":
-    from base import BaseService
-else:
-    from cloud_platform.services.base import BaseService
-    from cloud_platform.services.database_service import DatabaseService
+    
+    
     
 logger = logging.getLogger(__name__)
 
@@ -128,7 +129,7 @@ class AggregationService(BaseService):
         super().__init__(config)  
     
 
-    def execute(self, data: Dict) -> Dict:
+    def execute(self, data: Dict) -> ServiceResult:
         """
         Run aggregation on measurements from the DT's Digital Replicas.
 
@@ -164,8 +165,8 @@ class AggregationService(BaseService):
             status = "error executing the service"
             message = f"unexpected error as occurred:\n\t{e}"
         finally:
-            output = {"service": __class__.__name__, "status": status , "message":message}
-        
+            output = ServiceResult(service= __class__.__name__, status=status, notify=["WEBHOOK_OPERATOR"], priority=self.priority, message=message )
+
         return output 
     
 class MonitorService(BaseService):
@@ -268,16 +269,6 @@ class MonitorService(BaseService):
 
         return {}
 
-class PredictionService(BaseService):
-    """
-    Service for making predictions based on measurements from Digital Replicas.
-
-    This service could implement machine learning models or simple heuristics
-    to forecast future values or detect anomalies.
-    """
-    def execute(self, data: Dict, dr_type: str = None, attribute: str = None) -> Dict:
-        pass
-
 class AlertingService(BaseService):
     """
     Service for generating alerts based on measurements from Digital Replicas.
@@ -287,8 +278,12 @@ class AlertingService(BaseService):
     """
     def __init__(self, config: Dict = {}):
         super().__init__(config)
+        self.inform = {
+            1: ["WEBHOOK_ALERT", "ON_FIELD_ALARMS"],
+            2: ["WEBHOOK_ALERT"]
+        }
 
-    def execute(self, data: Dict) -> Dict:
+    def execute(self, data: Dict) -> ServiceResult:
         '''
         Run alerting logic on measurements from the DT's Digital Replicas.
         
@@ -300,11 +295,12 @@ class AlertingService(BaseService):
         '''
         try:
             check_data_input(data)
-            message = f""
             critical_count = 0
-            
+            temp = f""
+            notify = None
             for dr in data.get("sensors"):
                 single_dr_msg = f""
+                
                 try:
                     device_id = dr.get("device_id")
                     current_value = _parse_sensor_value(dr.get("current_value"))  # Extract numeric part
@@ -313,15 +309,13 @@ class AlertingService(BaseService):
 
                     if current_value is None or threshold is None or alert_level is None:
                         continue
-                        single_dr_msg += f"\n\n\tdevice ID: {device_id}"\
-                            f"\t alert value was impossible to be computed due to missing information from device"                    
-                        raise CustomError(message=single_dr_msg)
                     
                     if alert_level == "critical":
                         critical_count += 1
-                        single_dr_msg += f"\n\n\tCRITICAL -- device ID: {device_id}"\
+                        self.priority = 1
+                        single_dr_msg += f"\tCRITICAL -- device ID: {device_id}"\
                             f"\t value: {current_value}"\
-                            f"\t threshold: {threshold}"
+                            f"\t threshold: {threshold}\n"
                         # raise CustomError(message=single_dr_msg)
                         
                     # single_dr_msg += f"\n\n\tdevice ID: {device_id}"\
@@ -334,19 +328,21 @@ class AlertingService(BaseService):
                     logger.warning("Skipping DR with invalid current_value or threshold format.")
                     continue
                 finally:
-                    message += single_dr_msg
-            
+                    temp += single_dr_msg
 
+            notify = self.inform.get(self.priority)
             status = "service executed"
-                
+            message = f"\tcritical found: {critical_count}\n"
+            message += temp
         except CustomError as e:
             status = "service executed"
-            message = e
+            message = e.message
         except Exception as e:
             status = "error executing the service"
             message = f"unexpected error as occurred {e}"
         finally:
-            output = {"service": __class__.__name__, "status": status, "message": message}
+            output = ServiceResult(service= __class__.__name__, status=status, notify=notify, priority=self.priority,  message=message )
+            # output = {"service": __class__.__name__, "status": status, "message": message}
 
         return output
  
@@ -356,21 +352,30 @@ class DashboardVisualization(BaseService):
     '''
     def __init__(self, config: Dict = {}):
         super().__init__(config)
+        self.priority = 2
 
-    def execute(self, data):
+    def execute(self, data) -> ServiceResult:
         try:
             check_data_input(data)
             status = "service executed"
             message = str(data)
+        
+        except CustomError as e:
+            status = "service executed"
+            message = e.message
         except Exception as e:
-            message = e
+            status = "error executing the service"
+            message = f"unexpected error as occurred {e}"
         finally:
-            output = {"service": __class__.__name__, "status": status, "message": message}
+            output = ServiceResult(service= __class__.__name__, status=status, notify=["WEBHOOK_OPERATOR"], priority=self.priority, message=message, )
+            # output = {"service": __class__.__name__, "status": status, "message": message}
 
         return output
 
 if __name__ == "__main__":
 # test AggregationService
+# run it 
+#   C:...IoT_project> & c:....  IoT_project/.venv/Scripts/python.exe -m cloud_platform.services.analytics
     data = {
         "_id": "c5500d1e-c911-4e90-8dd4-250d04e9fd05",
         "digital_replicas": [],
@@ -414,9 +419,9 @@ if __name__ == "__main__":
                 "_id_document": "13660a38-080b-41d2-9f20-2531c6b56e62",
                 "dr_type": "sensor",
                 "device_id": "DDEEFF00-aq1",
-                "current_value": "100 ppm",
+                "current_value": "20 ppm",
                 "threshold": "31.45 ppm",
-                "alert_level": "critical",
+                "alert_level": "normal",
                 "device_type": "aq1"
             },
             {
@@ -459,21 +464,28 @@ if __name__ == "__main__":
                 "_id_document": "9e0650fc-9e75-4016-9d99-7d7c9cf37dc7",
                 "dr_type": "sensor",
                 "device_id": "22334455-aq2",
-                "current_value": "None ppb",
+                "current_value": "600 ppb",
                 "threshold": "42.53 ppb",
-                "alert_level": None,
+                "alert_level": "critical",
                 "device_type": "aq2"
             }
         ],
         "actuators": []
     }
     config ={}
-    ags_1 = AggregationService(config=config)
-    output_1 = ags_1.execute(data)
+    outputs = []
+    # ags_1 = AggregationService(config=config)
+    # output_1 = ags_1.execute(data)
+    # outputs.append(output_1)
+
     ags_2 = AlertingService(config=config)
     output_2 = ags_2.execute(data)
-
-    for key, value in output_1.items():
-        print(f"{key}: {value}")
-    for key, value in output_2.items():
-        print(f"{key}: {value}")
+    outputs.append(output_2)
+    # for key, value in output_1.items():
+    #     print(f"{key}: {value}")
+    for output in outputs:
+        print("\n\n")
+        print(f"service: {output.service}")
+        print(f"status: {output.status}")
+        print(f"notify: {output.notify}")
+        print(f"message: {output.message}")

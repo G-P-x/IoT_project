@@ -7,16 +7,15 @@ import threading
 from telegram.ext import Application, CommandHandler, MessageHandler, filters
 from pyngrok import ngrok
 import os
-
+import requests
 from cloud_platform.application.operator_api import register_operator_routes
 from cloud_platform.application import client_http
 from cloud_platform.telegram_bot.routes.webhook_routes import init_routes
 
 # - Queue imports
-import time
 import queue
-from cloud_platform.types.edge import PrioritizedItem, ServiceQueueItem
-
+from cloud_platform.types.queues import IngestionQueueItem, ServiceQueueItem, DispatchQueueItem, ItemDict
+from cloud_platform.types.edge import ServiceResult
 # ── DT Architecture imports ───────────────────────────────────────────
 # These follow the same layered structure as the lecture:
 #   Virtualization → Services → Digital Twin → Application (APIs)
@@ -169,18 +168,18 @@ class FlaskServer:
                 )
         # dt_factory.create_dt() # create the DT entry if it doesn't exist
 
-        # ── 4. Create the shared thread-safe queue
+        # ── 4. shared thread-safe queues
         ingestion_queue = queue.Queue()
-
-        # ── 5. Create the service queue
         service_queue = queue.Queue()
+        dispatch_queue = queue.Queue()
 
-        # ── 6. Store in app.config for Blueprint access ──────────────
+        # ── 5. Store in app.config for Blueprint access ──────────────
         self.app.config["SCHEMA_REGISTRY"] = schema_registry
         self.app.config["DB_SERVICE"] = db_service
         self.app.config["DT_FACTORY"] = dt_factory
         self.app.config["INGESTION_QUEUE"] = ingestion_queue # it is a thread-safe queue for ingestion tasks, accessible by all Blueprints (useful for the operator API to enqueue ingestion tasks for the GatewayPoller)
         self.app.config["SERVICE_QUEUE"] = service_queue # it is a thread-safe queue for service tasks, accessible by all Blueprints
+        self.app.config["DISPATCH_QUEUE"] = dispatch_queue
 
     def _register_blueprints(self, telegram_application=None):
         # Existing routes
@@ -246,7 +245,7 @@ class IngestionWorker:
 
     def stop(self):
         # Push a dummy item with the highest priority (0) to unblock and kill the thread
-        self.ingestion_queue.put(PrioritizedItem(priority=0, item="STOP"))
+        self.ingestion_queue.put(IngestionQueueItem(priority=0, item="STOP"))
         self._thread.join(timeout=5)
 
     def _run(self):
@@ -309,7 +308,7 @@ class GatewayPoller:
                 results = client_http.poll_gateways()
                 # logger.info("\n\nGateway polling results: %s\n\n", results)
                 if results:
-                    self.ingestion_queue.put(PrioritizedItem(priority=2, 
+                    self.ingestion_queue.put(IngestionQueueItem(priority=2, 
                                                              item={ "edge_results": results,
                                                                    "command_id": None,
                                                                    "operator_id": None })) # IngestionWorker will handle the ingestion of the results
@@ -324,8 +323,9 @@ class ServiceWorker:
     This class encapsulates the service worker that runs in a separate thread.
     It continuously listens to the service queue for new tasks and processes them.
     """
-    def __init__(self, service_queue: queue.Queue, dt_factory=None):
+    def __init__(self, service_queue: queue.Queue, dispatch_queue: queue.Queue, dt_factory=None):
         self.service_queue = service_queue
+        self.dispatch_queue = dispatch_queue
         self.dt_factory = dt_factory
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
@@ -388,21 +388,95 @@ class ServiceWorker:
         dt_services = self.dt_factory.get_services()
         for service in dt_services:
             try:
-                result = service.execute(task.dt_data)
-                result = dict(result)
-                # mandatory = ["serivce","status","message"]
-                # if mandatory not in result.keys():
-                #     raise AttributeError(f"result of execution of service {service.__name__} misses {mandatory}")
-                logger.info(f"service: {result.get("service")} -- message: {result.get("message")}\n\n\n")
-                # for key, val in result.items():
-                #     print(f"{key}: {val}\n"\
-                #                 f"{key}: {val}\n"\
-                #                 f"{key}\n{val}")
+                result = service.execute(task.dt_data) # execute the service
+                if not isinstance(result, ServiceResult):
+                    raise TypeError
+
+                # logger.info(f"\n\n\nservice: {result.service}\n")
+                # logger.info(f"status: {result.status}\n")
+                # logger.info(f"notify: {result.notify}\n")
+                # logger.info(f"message: {result.message}\n")
+                item_dict = ItemDict(service=result.service, status=result.status, notify=result.notify, message=result.message)
+                self.dispatch_queue.put(DispatchQueueItem(priority=result.priority, item_dict=item_dict))
 
             except Exception as exc:
                 logger.exception("Service %s execution failed: %s", service.__class__.__name__, exc)
 
+class DispatchWorker(threading.Thread):
+
+    @staticmethod
+    def _send_webhook(url: str, payload: dict):       
+        try:
+            # A timeout is crucial here so a dead endpoint doesn't hang the worker forever
+            response = requests.post(url, json=payload, timeout=5)
+            response.raise_for_status()
+            logger.info(f"Webhook dispatched successfully to {url}")
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to dispatch Webhook to {url}: {e}")
+
+    @staticmethod
+    def _send_telegram(url, payload: dict):
+        pass
+    
+    @staticmethod
+    def _default(url, payload):
+        logger.error(f"invalid recipient from service {payload.get("service")}, _default called")
+
+    RECIPIENTS = {
+        "TELEGRAM": _send_telegram,
+        "WEBHOOK_OPERATOR": _send_webhook,
+        "WEBHOOK_ALERT":_send_webhook,
+        "ON_FIELD_ALARMS": _send_webhook
+    }
+    URLS = {
+        "WEBHOOK_OPERATOR": "http://127.0.0.1:4500/webhook/OPERATOR",
+        "WEBHOOK_ALERT": "http://127.0.0.1:4500/webhook/ALERT",
+        "ON_FIELD_ALARMS": "http://127.0.0.1:4500/webhook/FIELD",
+    }
+    def __init__(self, dispatch_queue: queue.PriorityQueue, telegram_bot = None):
+        super().__init__(daemon=True)
+        self.dispatch_queue = dispatch_queue
+        self.telegram_bot = telegram_bot
+
+    def stop(self):
+        # Push a dummy item with the highest priority (0) to unblock and kill the thread
+        self.dispatch_queue.put(DispatchQueueItem(priority=0, item_dict="STOP"))
         
+
+    def run(self):
+        logger.info("DispatchWorker started.")
+        while True:
+            try:
+                # Block until an item is available
+                item: DispatchQueueItem = self.dispatch_queue.get()
+
+                if not isinstance(item, DispatchQueueItem):
+                    raise TypeError(f"Only DispatchQueueItem allowed, got {type(item)}")
+                
+                if item.priority == 0 and item.item_dict == "STOP":
+                    logger.info("DispatchWorker stopping.")
+                    break
+                self._process_dispatch(item.item_dict)
+            except TypeError as e:
+                logger.error(f"processed an invalid type: {e}")
+            except Exception as e:
+                logger.error(f"Unidentified error occurs: {e}")
+
+        
+    def _process_dispatch(self, item_dict: ItemDict|str):
+        if not isinstance(item_dict, dict):
+            raise TypeError(f"Only ItemDict types, got {type(item_dict)}")
+        
+        if item_dict.get("notify") is None:
+            return
+        for recipient in item_dict.get("notify"):
+            f = self.RECIPIENTS.get(recipient, self._default)
+            payload = {"service":item_dict.get("service"),"service_status": item_dict.get("status"),
+                       "message": item_dict.get("message")}
+            url = self.URLS.get(recipient)
+            f(url, payload)
+    
+    
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -427,6 +501,18 @@ if __name__ == "__main__":
     if not server.app.config.get("INGESTION_QUEUE"):
         raise RuntimeError("INGESTION_QUEUE not initialized on Flask app")
     
+    dispatch_worker = DispatchWorker(
+        dispatch_queue=server.app.config.get("DISPATCH_QUEUE"),
+    )
+    dispatch_worker.start()
+    
+    service_worker = ServiceWorker(
+        service_queue = server.app.config.get("SERVICE_QUEUE"),
+        dispatch_queue = server.app.config.get("DISPATCH_QUEUE"),
+        dt_factory = server.app.config.get("DT_FACTORY")
+    )
+
+    service_worker.start()
     ingestion_worker = IngestionWorker(
         db_service=server.app.config.get("DB_SERVICE"),
         dt_factory=server.app.config.get("DT_FACTORY"),
@@ -441,11 +527,7 @@ if __name__ == "__main__":
     )
     poller.start()
 
-    service_worker = ServiceWorker(
-        service_queue = server.app.config.get("SERVICE_QUEUE"),
-        dt_factory = server.app.config.get("DT_FACTORY")
-    )
-    service_worker.start()
+    
 
     try:
         server.run(
@@ -459,3 +541,4 @@ if __name__ == "__main__":
         poller.stop()
         ingestion_worker.stop()
         service_worker.stop()
+        dispatch_worker.stop()
