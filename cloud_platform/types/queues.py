@@ -12,7 +12,11 @@ class ServiceQueueItem:
     dt_data: Any  # list of dicts containing the digital twin data for each device
     command_id: str | None = None  # command_id of the command that generated this result
 
-
+@dataclass
+class HistoryQueueItem:
+    stop_signal: bool
+    operator_id: str
+    query: dict
 
 
 class ItemDict(TypedDict):
@@ -24,4 +28,5 @@ class ItemDict(TypedDict):
 @dataclass(order=True)
 class DispatchQueueItem:
     priority: int # 0: MAX PRIORITY
-    item_dict: str | ItemDict = field(compare=False)
+    stop_signal: bool
+    item_dict: ItemDict = field(compare=False)

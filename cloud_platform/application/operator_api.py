@@ -6,7 +6,9 @@ from pydantic import BaseModel, ValidationError
 from typing import Literal
 
 ## ThreadPoolExecutor for background ingestion tasks
-from cloud_platform.types.queues import IngestionQueueItem, DispatchQueueItem
+from cloud_platform.types.queues import IngestionQueueItem, DispatchQueueItem, HistoryQueueItem
+import queue
+
 # ── Imports for Mock data for testing (delete in production) ──────────────────────────────────
 from datetime import datetime, timedelta
 import random
@@ -137,7 +139,7 @@ def commands():
         logger.info(f"new poll interval arrived: {new_interval}")
         result = current_app.config["GATEWAY_POLLER"].update_interval(new_interval)
     except ValueError as e:
-        logger.info(e)
+        logger.error(e)
         return jsonify({
             "status":"error",
             "message":"invalid"
@@ -149,6 +151,33 @@ def commands():
         "message": result,
     }), 200
 
+
+@bp_operator.route("/history", methods=["POST"])
+def query_history():
+    try:
+        data:dict = request.get_json()
+        q : queue.Queue = current_app.config.get("HISTORY_QUEUE")
+        operator:str = data.get("operator_id")
+        query:dict = data.get("query")
+        logger.info(f"received queryin in Operator Route: {query}")
+        q.put(HistoryQueueItem(stop_signal=False, operator_id=operator, query=query))
+        logger.info(f"task in queue: {q}")
+        return jsonify({
+            "status":"on going",
+            "message":"your request is being processed..."
+        }), 200
+    except KeyError as e:
+        logger.error(e)
+        return jsonify({
+            "status":"error",
+            "message":"malformed request"
+        }), 400
+    except Exception as e:
+        logger.error(e)
+        return jsonify({
+            "status":"error",
+            "message":"invalid"
+        }), 400
 
 @bp_operator.route("/history/<parameter>", methods=["GET"])
 def get_history(parameter: str):

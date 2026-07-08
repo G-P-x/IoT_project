@@ -14,7 +14,7 @@ from cloud_platform.telegram_bot.routes.webhook_routes import init_routes
 
 # - Queue imports
 import queue
-from cloud_platform.types.queues import IngestionQueueItem, ServiceQueueItem, DispatchQueueItem, ItemDict
+from cloud_platform.types.queues import IngestionQueueItem, ServiceQueueItem, DispatchQueueItem, HistoryQueueItem, ItemDict
 from cloud_platform.types.edge import ServiceResult
 # ── DT Architecture imports ───────────────────────────────────────────
 # These follow the same layered structure as the lecture:
@@ -172,6 +172,7 @@ class FlaskServer:
         ingestion_queue = queue.Queue()
         service_queue = queue.Queue()
         dispatch_queue = queue.Queue()
+        history_queue = queue.Queue()
 
         # ── 5. Store in app.config for Blueprint access ──────────────
         self.app.config["SCHEMA_REGISTRY"] = schema_registry
@@ -180,6 +181,7 @@ class FlaskServer:
         self.app.config["INGESTION_QUEUE"] = ingestion_queue # it is a thread-safe queue for ingestion tasks, accessible by all Blueprints (useful for the operator API to enqueue ingestion tasks for the GatewayPoller)
         self.app.config["SERVICE_QUEUE"] = service_queue # it is a thread-safe queue for service tasks, accessible by all Blueprints
         self.app.config["DISPATCH_QUEUE"] = dispatch_queue
+        self.app.config["HISTORY_QUEUE"] = history_queue
 
     def _register_blueprints(self, telegram_application=None):
         # Existing routes
@@ -422,7 +424,7 @@ class ServiceWorker:
                 # logger.info(f"notify: {result.notify}\n")
                 # logger.info(f"message: {result.message}\n")
                 item_dict = ItemDict(service=result.service, status=result.status, notify=result.notify, message=result.message)
-                self.dispatch_queue.put(DispatchQueueItem(priority=result.priority, item_dict=item_dict))
+                self.dispatch_queue.put(DispatchQueueItem(priority=result.priority, stop_signal=False, item_dict=item_dict))
 
             except Exception as exc:
                 logger.exception("Service %s execution failed: %s", service.__class__.__name__, exc)
@@ -465,7 +467,7 @@ class DispatchWorker(threading.Thread):
 
     def stop(self):
         # Push a dummy item with the highest priority (0) to unblock and kill the thread
-        self.dispatch_queue.put(DispatchQueueItem(priority=0, item_dict="STOP"))
+        self.dispatch_queue.put(DispatchQueueItem(priority=0, stop_signal=True, item_dict={}))
         
 
     def run(self):
@@ -478,7 +480,7 @@ class DispatchWorker(threading.Thread):
                 if not isinstance(item, DispatchQueueItem):
                     raise TypeError(f"Only DispatchQueueItem allowed, got {type(item)}")
                 
-                if item.priority == 0 and item.item_dict == "STOP":
+                if item.priority == 0 and item.stop_signal:
                     logger.info("DispatchWorker stopping.")
                     break
                 self._process_dispatch(item.item_dict)
@@ -488,7 +490,7 @@ class DispatchWorker(threading.Thread):
                 logger.error(f"Unidentified error occurs: {e}")
 
         
-    def _process_dispatch(self, item_dict: ItemDict|str):
+    def _process_dispatch(self, item_dict: ItemDict):
         if not isinstance(item_dict, dict):
             raise TypeError(f"Only ItemDict types, got {type(item_dict)}")
         
@@ -501,7 +503,46 @@ class DispatchWorker(threading.Thread):
             url = self.URLS.get(recipient)
             f(url, payload)
     
+class HistoryService():
+    def __init__(self, history_queue: queue.Queue, dispatch_queue: queue.Queue, db_service:DatabaseService, dt_factory) -> None:
+        self.history_queue = history_queue
+        self.dispatch_queue = dispatch_queue
+        self.db_service = db_service
+        self.dt_factory = dt_factory
+        self._stop_event = threading.Event()
+        self._thread = threading.Thread(target=self._run, daemon=True)
+
+    def start(self): # already declared and set inheriting threading.Thread
+        self._thread.start()
+
+    def stop(self):
+        self.history_queue.put(HistoryQueueItem(stop_signal = True, operator_id= "system", query={}))
+
+    def _run(self):
+        
+        while not self._stop_event.is_set():
+            try:
+                logger.info("History Reader ready for a new request...")
+                task = self.history_queue.get()
+                assert isinstance(task, HistoryQueueItem), "task in queue is not an HistoryQueueItem"
+                logger.info(f"reveived a history research request from {task.operator_id}")
+                logger.info(f"received query in HistoryService: {task.query}")
+                if task.stop_signal:
+                    self._stop_event.set()
+                    self.history_queue.task_done()
+                    logger.info("History Serice shut down")
+                    break
+                self.process_task(task)
+            except AssertionError as e:
+                logger.error(e)
+            except Exception as e:
+                logger.error(e)
     
+    def process_task(self, task: HistoryQueueItem):
+        logger.info(f"received query in process_task HistoryService: {task.query}")
+        query_result = self.db_service.query_history_records(task.query)
+        self.dispatch_queue.put(DispatchQueueItem(priority=2, stop_signal=False, item_dict=ItemDict(service="history record", status="success", notify=["WEBHOOK_OPERATOR"], message=str(query_result))))
+
 
 if __name__ == "__main__":
     logging.basicConfig(level=logging.INFO, format="%(asctime)s [%(levelname)s] %(name)s: %(message)s")
@@ -531,13 +572,21 @@ if __name__ == "__main__":
     )
     dispatch_worker.start()
     
+    history_service = HistoryService(
+        history_queue=server.app.config.get("HISTORY_QUEUE"),
+        dispatch_queue=server.app.config.get("DISPATCH_QUEUE"),
+        db_service=server.app.config.get("DB_SERVICE"),
+        dt_factory = server.app.config.get("DT_FACTORY")
+    )
+    history_service.start()
+
     service_worker = ServiceWorker(
         service_queue = server.app.config.get("SERVICE_QUEUE"),
         dispatch_queue = server.app.config.get("DISPATCH_QUEUE"),
         dt_factory = server.app.config.get("DT_FACTORY")
     )
-
     service_worker.start()
+
     ingestion_worker = IngestionWorker(
         db_service=server.app.config.get("DB_SERVICE"),
         dt_factory=server.app.config.get("DT_FACTORY"),
@@ -568,3 +617,4 @@ if __name__ == "__main__":
         ingestion_worker.stop()
         service_worker.stop()
         dispatch_worker.stop()
+        history_service.stop()
