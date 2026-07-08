@@ -537,11 +537,50 @@ class HistoryService():
                 logger.error(e)
             except Exception as e:
                 logger.error(e)
-    
     def process_task(self, task: HistoryQueueItem):
         logger.info(f"received query in process_task HistoryService: {task.query}")
-        query_result = self.db_service.query_history_records(task.query)
-        self.dispatch_queue.put(DispatchQueueItem(priority=2, stop_signal=False, item_dict=ItemDict(service="history record", status="success", notify=["WEBHOOK_OPERATOR"], message=str(query_result))))
+        query_result: list[dict] = self.db_service.query_history_records(task.query)
+        message = ""
+        
+        for result in query_result:
+            # Using parentheses for safe multiline string concatenation (no backslashes needed)
+            message += (
+                f"\n\tDEVICE ID: {result.get('device_id')}"
+                f"\n\tRECORD TYPE: {result.get('record_type')}"
+                f"\n\tTIMESTAMP: {result.get('timestamp')}"
+            )
+            
+            data: dict = result.get("data")
+            if data:
+                unit = result.get("unit", "")
+                
+                # Appending line by line prevents the ternary operators from swallowing other fields
+                message += f"\n\tSTATUS: {data.get('status')}"
+                message += f"\n\tSOURCE: {data.get('source')}"
+                
+                message += f"\n\tOPERATOR ID: {data.get('operator_id')}" if data.get("operator_id") else "\n\tOPERATOR ID: None"
+                
+                message += f"\n\tVALUE: {data.get('value')} {unit}" if data.get("value") else "\n\tVALUE: None"
+                
+                message += f"\n\tTHRESHOLD: {data.get('threshold')} {unit}" if data.get("threshold") else "\n\tTHRESHOLD: None"
+                
+                # Fixed the condition and fallback string for alert_level
+                message += f"\n\tALERT LEVEL: {data.get('alert_level')} {unit}" if data.get("alert_level") else "\n\tALERT LEVEL: None"
+                
+                message += "\n" # leave space between results
+                
+        self.dispatch_queue.put(
+            DispatchQueueItem(
+                priority=2, 
+                stop_signal=False, 
+                item_dict=ItemDict(
+                    service=f"history record\nOPERATOR requesting: {task.operator_id}\nquery: {task.query}", 
+                    status="success", 
+                    notify=["WEBHOOK_OPERATOR"], 
+                    message=message
+                )
+            )
+        )
 
 
 if __name__ == "__main__":
