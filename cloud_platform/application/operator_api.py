@@ -10,6 +10,7 @@ from cloud_platform.types.queues import IngestionQueueItem, DispatchQueueItem
 # ── Imports for Mock data for testing (delete in production) ──────────────────────────────────
 from datetime import datetime, timedelta
 import random
+import logging
 
 # This file defines the operator API routes and their handlers.
 # An operator can use these routes to view telemetry data, health events, and send commands to the DT.
@@ -19,6 +20,8 @@ import random
 # 4. View health events - sensor failures, connectivity issues, etc.
 # 5. View current state of the DT (latest telemetry, health status, etc.)
 # 6. View sensor status and diagnostics
+
+logger = logging.getLogger(__name__)
 
 # ────────────────── Command Dispatcher ──────────────────
 class CommandDispatcher:
@@ -125,23 +128,25 @@ bp_operator = Blueprint("operator_api", __name__, url_prefix="/operator")
 def home():
     return jsonify({"message": "Welcome to the Operator API. Use /operator/history/<parameter> to view telemetry history and /operator/commands/send to send commands to the DT."})
 
-@bp_operator.route("/commands", methods=["POST"])
+@bp_operator.route("/change_poll_interval", methods=["PUT"])
 def commands():
     # Retrieve the JSON data from the request body
     data = request.get_json()
-
-    # Accessing the fields
-    command_id = data.get("command_id")
-    issued_by = data.get("issued_by")
-    target = data.get("target")
-
-    # Example: Process the data here...
-    print(f"Received command {command_id} from {issued_by}")
+    try:
+        new_interval = int(data.get("poll_interval"))
+        logger.info(f"new poll interval arrived: {new_interval}")
+        result = current_app.config["GATEWAY_POLLER"].update_interval(new_interval)
+    except ValueError as e:
+        logger.info(e)
+        return jsonify({
+            "status":"error",
+            "message":"invalid"
+        }), 400
 
     # Return a success response
     return jsonify({
         "status": "success",
-        "message": f"Command {command_id} received successfully"
+        "message": result,
     }), 200
 
 

@@ -310,7 +310,6 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
             # dt_factory.add_digital_replicas(dt_factory.dt_id, [{"type": "gateway", "id": dr_entry["_id"]}])
             continue
         
-
         ################## ----- Second case: gateway-level success ----- ##################
 
 

@@ -284,6 +284,34 @@ class GatewayPoller:
         self._stop_event = threading.Event()
         self._exception = None
         self._thread = threading.Thread(target=self._run_thread, daemon=True)
+        
+        # Initialize two events, one to wake up the thread (when it is asleep), one to stop it.
+        self.wake_up_event = threading.Event()
+        self._stop_event = threading.Event()
+
+    def update_interval(self, new_interval_s) -> str:
+        if not isinstance(new_interval_s, int):
+            raise ValueError("update interval must receive an int")
+        
+        message = f"Polling Interval set to {new_interval_s} seconds"
+        # minimum polling interval
+        if new_interval_s < 1:
+            new_interval_s = int(1)
+            message = "minum interval is 1 second. Polling set to 1 second"
+
+        self.poll_interval_s = new_interval_s
+        # Trigger the event, interrupting thread sleep
+        self.wake_up_event.set()
+                
+        return message
+
+    def start(self) -> None:
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        self.wake_up_event.set()
+        self._thread.join(timeout=10)
 
     def _run_thread(self) -> None:
         try:
@@ -294,29 +322,26 @@ class GatewayPoller:
         finally:
             self._stop_event.set()
 
-    def start(self) -> None:
-        self._thread.start()
-
-    def stop(self) -> None:
-        self._stop_event.set()
-        self._thread.join(timeout=10)
-
     def _run(self) -> None:
         logger.info("Gateway poller started (interval=%.2fs)", self.poll_interval_s)
         while not self._stop_event.is_set():
             try:
                 results = client_http.poll_gateways()
-                # logger.info("\n\nGateway polling results: %s\n\n", results)
-                if results:
-                    self.ingestion_queue.put(IngestionQueueItem(priority=2, 
-                                                             item={ "edge_results": results,
-                                                                   "command_id": None,
-                                                                   "operator_id": None })) # IngestionWorker will handle the ingestion of the results
+
+                self.ingestion_queue.put(IngestionQueueItem(priority=2, 
+                                                            item={ "edge_results": results,
+                                                                "command_id": None,
+                                                                "operator_id": None })) # IngestionWorker will handle the ingestion of the results
 
             except Exception as exc:
                 logger.exception("Gateway polling failed: %s", exc)
 
-            self._stop_event.wait(self.poll_interval_s)
+            # 3. WAIT. 
+            # This is interrupted by BOTH update_interval() and stop()
+            self.wake_up_event.wait(timeout=self.poll_interval_s)
+            
+            # Reset the event flag for the next loop iteration
+            self.wake_up_event.clear()
 
 class ServiceWorker:
     """
@@ -525,6 +550,7 @@ if __name__ == "__main__":
         poll_interval_s = cfg.POLLING_INTERVAL_S, 
         ingestion_queue = server.app.config.get("INGESTION_QUEUE")
     )
+    server.app.config["GATEWAY_POLLER"] = poller # added to APP configuration to be able to change the polling interval
     poller.start()
 
     
