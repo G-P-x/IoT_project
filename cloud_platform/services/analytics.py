@@ -298,6 +298,7 @@ class AlertingService(BaseService):
             critical_count = 0
             temp = f""
             notify = None
+            
             for dr in data.get("sensors"):
                 single_dr_msg = f""
                 
@@ -337,12 +338,13 @@ class AlertingService(BaseService):
         except CustomError as e:
             status = "service executed"
             message = e.message
+            notify = self.inform.get(self.priority)
         except Exception as e:
             status = "error executing the service"
             message = f"unexpected error as occurred {e}"
+            notify = self.inform.get(self.priority)
         finally:
             output = ServiceResult(service= __class__.__name__, status=status, notify=notify, priority=self.priority,  message=message )
-            # output = {"service": __class__.__name__, "status": status, "message": message}
 
         return output
  

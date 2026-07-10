@@ -1,6 +1,7 @@
 import os
 from dotenv import load_dotenv
 import json
+from dataclasses import dataclass
 
 
 class Config:
@@ -15,18 +16,34 @@ class Config:
     HTTP_ENDPOINT_PORT = int(os.getenv("HTTP_ENDPOINT_PORT", "5000"))
 
     ### ---------- Edge devices ----------
-    EDGE_DEVICES = {
-        "gateway_main": os.getenv("GATEWAY_MAIN", "http://127.0.0.1:5050/gtw_01"),
-        # "gateway_01": "http://127.0.0.1:5050/gtw_01",
-        "gateway_02": "http://127.0.0.1:5050/gtw_02",        
-    }
-    # "gateway_Matteo": "http://10.217.191.225:8080/data", # inserire indirizzo IP di Matteo
+    # EDGE_DEVICE = {
+    #     "gateway_main": os.getenv("GATEWAY_MAIN", "http://127.0.0.1:5050"),
+    # }
+    if os.getenv("GATEWAY_MAIN"):
+        EDGE_DEVICES = {
+            "gateway_main":os.getenv("GATEWAY_MAIN", "http://127.0.0.1:5050"),
+        }
+    else:
+        EDGE_DEVICES = {
+            "gateway_main" : "http://127.0.0.1:5050",
+            "gateway_02": "http://127.0.0.1:5050/gtw_02",        
+        }
+
 
     POLL_ENDPOINT = os.getenv("POLL_ENDPOINT", "/data")
     # HTTP Polling interval (seconds)
     POLLING_INTERVAL_S = int(5)  # Default to 5 seconds
 
     COMMAND_ENDPOINT = os.getenv("COMMAND_ENDPOINT", "/command")
+
+    ON_FIELD_ALARMS : list = [f"{gateway}{os.getenv("COMMAND_ENDPOINT", "/command")}" for gateway in EDGE_DEVICES.values()]
+
+    ### ---------- Operator Server ----------
+    OPERATOR_PORT = int(os.getenv("OPERATOR_PORT", 4500))
+    OPERATOR_IP = os.getenv("OPERATOR_IP_PORT", "127.0.0.1:4500")
+
+    WEBHOOK_OPERATOR = "http://127.0.0.1:4500/webhook/OPERATOR"
+    WEBHOOK_ALERT = "http://127.0.0.1:4500/webhook/ALERT"       
 
     ### ---------- Telegram Bot ----------
 
@@ -52,3 +69,9 @@ class Config:
         "cmd_01": "sensor_reading_event",
         "cmd_02": "display_message",
     }
+
+if __name__ == "__main__":
+    cfg = Config()
+    print(cfg.EDGE_DEVICES)
+    print()
+    print(cfg.ON_FIELD_ALARMS)

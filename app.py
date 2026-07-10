@@ -1,4 +1,4 @@
-from flask import Flask
+from flask import Flask, jsonify
 from flask_cors import CORS
 from config.config import Config
 import asyncio
@@ -328,6 +328,7 @@ class GatewayPoller:
         logger.info("Gateway poller started (interval=%.2fs)", self.poll_interval_s)
         while not self._stop_event.is_set():
             try:
+
                 results = client_http.poll_gateways()
 
                 self.ingestion_queue.put(IngestionQueueItem(priority=2, 
@@ -430,11 +431,13 @@ class ServiceWorker:
                 logger.exception("Service %s execution failed: %s", service.__class__.__name__, exc)
 
 class DispatchWorker(threading.Thread):
-
+    '''
+        Dispatch the results of the services to the legitimate recipients
+    '''
     @staticmethod
     def _send_webhook(url: str, payload: dict):       
         try:
-            # A timeout is crucial here so a dead endpoint doesn't hang the worker forever
+            # Timeout so that a dead endpoint doesn't hang the worker forever
             response = requests.post(url, json=payload, timeout=5)
             response.raise_for_status()
             logger.info(f"Webhook dispatched successfully to {url}")
@@ -453,17 +456,19 @@ class DispatchWorker(threading.Thread):
         "TELEGRAM": _send_telegram,
         "WEBHOOK_OPERATOR": _send_webhook,
         "WEBHOOK_ALERT":_send_webhook,
-        "ON_FIELD_ALARMS": _send_webhook
+        "ON_FIELD_ALARMS": _send_webhook,
     }
-    URLS = {
-        "WEBHOOK_OPERATOR": "http://127.0.0.1:4500/webhook/OPERATOR",
-        "WEBHOOK_ALERT": "http://127.0.0.1:4500/webhook/ALERT",
-        "ON_FIELD_ALARMS": "http://127.0.0.1:4500/webhook/FIELD",
-    }
-    def __init__(self, dispatch_queue: queue.PriorityQueue, telegram_bot = None):
+    
+    def __init__(self, config: Config, dispatch_queue: queue.PriorityQueue, telegram_bot = None):
         super().__init__(daemon=True)
+        self.config : Config = config
         self.dispatch_queue = dispatch_queue
         self.telegram_bot = telegram_bot
+        self._URLS = {
+            "WEBHOOK_OPERATOR": config.WEBHOOK_OPERATOR,
+            "WEBHOOK_ALERT": config.WEBHOOK_OPERATOR, 
+            "ON_FIELD_ALARMS": config.ON_FIELD_ALARMS
+        }
 
     def stop(self):
         # Push a dummy item with the highest priority (0) to unblock and kill the thread
@@ -484,6 +489,8 @@ class DispatchWorker(threading.Thread):
                     logger.info("DispatchWorker stopping.")
                     break
                 self._process_dispatch(item.item_dict)
+            except KeyError as e:
+                logger.error(f"process dispatch failed with error: {e}")
             except TypeError as e:
                 logger.error(f"processed an invalid type: {e}")
             except Exception as e:
@@ -498,10 +505,19 @@ class DispatchWorker(threading.Thread):
             return
         for recipient in item_dict.get("notify"):
             f = self.RECIPIENTS.get(recipient, self._default)
+
             payload = {"service":item_dict.get("service"),"service_status": item_dict.get("status"),
                        "message": item_dict.get("message")}
-            url = self.URLS.get(recipient)
-            f(url, payload)
+            
+            if recipient == "ON_FIELD_ALARMS":
+                payload = {"command":"alarm", "buzzer": 1} # default payload to trigger all alarms
+
+            url = self._URLS.get(recipient)
+            if isinstance(url, list):
+                for u in url:
+                    f(u, payload)
+            else:
+                f(url, payload)
     
 class HistoryService():
     def __init__(self, history_queue: queue.Queue, dispatch_queue: queue.Queue, db_service:DatabaseService, dt_factory) -> None:
@@ -607,6 +623,7 @@ if __name__ == "__main__":
         raise RuntimeError("INGESTION_QUEUE not initialized on Flask app")
     
     dispatch_worker = DispatchWorker(
+        config=cfg,
         dispatch_queue=server.app.config.get("DISPATCH_QUEUE"),
     )
     dispatch_worker.start()

@@ -35,7 +35,7 @@ class CommandDispatcher:
         self.client = client_http
         self.commands_map = {
             "cmd_01": self._send_command_to_sensors,
-            "cmd_02": self._send_command_to_actuators
+            # "cmd_02": self._send_command_to_actuators # da eliminare (matteo implementa la logica di attivazione dell'allarme localmente)
         }
 
     def send_command(self, command: str, target: dict[str, list[str]]) -> dict:
@@ -179,60 +179,60 @@ def query_history():
             "message":"invalid"
         }), 400
 
-@bp_operator.route("/history/<parameter>", methods=["GET"])
-def get_history(parameter: str):
-    """
-    Accessed via GET request to /operator/history/temperature?twin_id=etna_01&limit=100
-    The request is sent from the frontend through the javascript code in history.html,
-    which extracts the parameter, twin_id, and limit from the user input and sends the 
-    request to this endpoint. 
-    The handler then retrieves the data from the DTService and returns it as JSON.
-    """
+# @bp_operator.route("/history/<parameter>", methods=["GET"])
+# def get_history(parameter: str):
+#     """
+#     Accessed via GET request to /operator/history/temperature?twin_id=etna_01&limit=100
+#     The request is sent from the frontend through the javascript code in history.html,
+#     which extracts the parameter, twin_id, and limit from the user input and sends the 
+#     request to this endpoint. 
+#     The handler then retrieves the data from the DTService and returns it as JSON.
+#     """
 
-    twin_id = request.args.get("twin_id") or current_app.config["DEFAULT_TWIN_ID"]
-    sensor_id = request.args.get("sensor_id")          # optional sensor filter
-    date_from = request.args.get("from")                # ISO datetime string
-    date_to = request.args.get("to")                    # ISO datetime string
-    # dt = current_app.extensions["dt_service"]
-    # return jsonify(dt.get_history(twin_id, parameter, sensor_id=sensor_id, date_from=date_from, date_to=date_to))
+#     twin_id = request.args.get("twin_id") or current_app.config["DEFAULT_TWIN_ID"]
+#     sensor_id = request.args.get("sensor_id")          # optional sensor filter
+#     date_from = request.args.get("from")                # ISO datetime string
+#     date_to = request.args.get("to")                    # ISO datetime string
+#     # dt = current_app.extensions["dt_service"]
+#     # return jsonify(dt.get_history(twin_id, parameter, sensor_id=sensor_id, date_from=date_from, date_to=date_to))
 
-    # ── Mock data for testing ──────────────────────────────────────────
+#     # ── Mock data for testing ──────────────────────────────────────────
 
-    sensors_map = {
-        "temperature":   ["temp_01", "temp_02"],
-        "air_quality":   ["aq_01",   "aq_02"],
-        "seismic_waves": ["s_01",    "s_02"],
-    }
-    units_map = {
-        "temperature": "°C",
-        "air_quality": "AQI",
-        "seismic_waves": "mm/s",
-    }
-    sensors = [sensor_id] if sensor_id else sensors_map.get(parameter, ["sensor"])
-    unit = units_map.get(parameter, "")
+#     sensors_map = {
+#         "temperature":   ["temp_01", "temp_02"],
+#         "air_quality":   ["aq_01",   "aq_02"],
+#         "seismic_waves": ["s_01",    "s_02"],
+#     }
+#     units_map = {
+#         "temperature": "°C",
+#         "air_quality": "AQI",
+#         "seismic_waves": "mm/s",
+#     }
+#     sensors = [sensor_id] if sensor_id else sensors_map.get(parameter, ["sensor"])
+#     unit = units_map.get(parameter, "")
 
-    # Parse date range
-    dt_from = datetime.fromisoformat(date_from) if date_from else datetime.utcnow() - timedelta(days=7)
-    dt_to = datetime.fromisoformat(date_to) if date_to else datetime.utcnow()
-    total_seconds = (dt_to - dt_from).total_seconds()
+#     # Parse date range
+#     dt_from = datetime.fromisoformat(date_from) if date_from else datetime.utcnow() - timedelta(days=7)
+#     dt_to = datetime.fromisoformat(date_to) if date_to else datetime.utcnow()
+#     total_seconds = (dt_to - dt_from).total_seconds()
 
-    # ~24 samples per day, at least 2
-    num_points = max(2, int((total_seconds / 86400) * 24))
+#     # ~24 samples per day, at least 2
+#     num_points = max(2, int((total_seconds / 86400) * 24))
 
-    # Evenly spaced timestamps across the range
-    step = total_seconds / (num_points - 1) if num_points > 1 else 0
+#     # Evenly spaced timestamps across the range
+#     step = total_seconds / (num_points - 1) if num_points > 1 else 0
 
-    mock_data = [
-        {
-            "ts": (dt_from + timedelta(seconds=i * step)).isoformat(),
-            "value": round(random.uniform(18.0, 35.0), 2),
-            "unit": unit,
-            "sensor_id": s,
-        }
-        for s in sensors
-        for i in range(num_points)
-    ]
-    return jsonify(mock_data)
+#     mock_data = [
+#         {
+#             "ts": (dt_from + timedelta(seconds=i * step)).isoformat(),
+#             "value": round(random.uniform(18.0, 35.0), 2),
+#             "unit": unit,
+#             "sensor_id": s,
+#         }
+#         for s in sensors
+#         for i in range(num_points)
+#     ]
+#     return jsonify(mock_data)
 
 
 @bp_operator.route("/commands/send", methods=["POST"])
@@ -255,7 +255,7 @@ def send():
     edge_results = dispatcher.send_command(command=command_id, target=target)
 
     if edge_results:
-        ingestion_queue = current_app.config.get("INGESTION_QUEUE")
+        ingestion_queue : queue.Queue = current_app.config.get("INGESTION_QUEUE")
         ingestion_queue.put(IngestionQueueItem(priority=1, item={"edge_results": edge_results, "command_id": command_id, "operator_id": operator_id, "target": target}))
         return jsonify(edge_results), 200
     else:
