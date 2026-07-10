@@ -6,8 +6,8 @@ import json
 class Config:
     load_dotenv()  # Load environment variables from .env file if it exists
     # Flask
-    FLASK_HOST = os.getenv("FLASK_HOST")
-    FLASK_PORT = int(os.getenv("FLASK_PORT"))
+    FLASK_HOST = os.getenv("FLASK_HOST", "127.0.0.1")
+    FLASK_PORT = int(os.getenv("FLASK_PORT", 5000))
     FLASK_DEBUG = os.getenv("FLASK_DEBUG", "False").lower() == "true"
 
     # Server HTTP  for researcher clients
@@ -16,14 +16,11 @@ class Config:
 
     ### ---------- Edge devices ----------
     EDGE_DEVICES = {
-        "gateway_01": "http://127.0.0.1:5050/gtw_01",
-        "gateway_02": "http://127.0.0.1:5050/gtw_02",
+        "gateway_main": os.getenv("GATEWAY_MAIN", "http://127.0.0.1:5050/gtw_01"),
+        # "gateway_01": "http://127.0.0.1:5050/gtw_01",
+        "gateway_02": "http://127.0.0.1:5050/gtw_02",        
     }
-    # try:
-    #     EDGE_DEVICES = json.loads(EDGE_DEVICES_RAW)
-    # except json.JSONDecodeError:
-    #     print(f"Error parsing EDGE_DEVICES: {EDGE_DEVICES_RAW}. Expected JSON format.")
-    #     EDGE_DEVICES = {}
+    # "gateway_Matteo": "http://10.217.191.225:8080/data", # inserire indirizzo IP di Matteo
 
     POLL_ENDPOINT = os.getenv("POLL_ENDPOINT", "/data")
     # HTTP Polling interval (seconds)
