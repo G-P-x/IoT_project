@@ -29,14 +29,16 @@ class BaseService(ABC):
     contains a 'digital_replicas' key with the full list of DR dicts.
     """
 
-    def __init__(self):
+    def __init__(self, config:dict = {}):
         # Automatically derive the service name from the class name.
         # This avoids boilerplate in every subclass and keeps the naming
         # consistent across the system.
         self.name = self.__class__.__name__
+        self.priority = 2 # each service has lowest priority by default (2: normal, 1: critical, 0: stop used in app.py)
+        self.config = config
 
     @abstractmethod
-    def execute(self, data: Dict, dr_type: str = None, attribute: str = None) -> Any:
+    def execute(self, *args, **kwargs) -> Any:
         """
         Execute the service logic on the provided data.
 
@@ -51,3 +53,19 @@ class BaseService(ABC):
             Processed result in any format (dict, list, scalar, …).
         """
         pass
+    # @abstractmethod
+    # def execute(self, data: Dict, dr_type: str = None, attribute: str = None) -> Any:
+    #     """
+    #     Execute the service logic on the provided data.
+
+    #     Args:
+    #         data:      Input dict — guaranteed to contain 'digital_replicas'.
+    #         dr_type:   Optional filter to restrict processing to a specific DR type
+    #                    (e.g. 'gateway', 'sensor').
+    #         attribute: Optional filter for a specific measurement attribute
+    #                    (e.g. 'temperature', 'air_quality').
+
+    #     Returns:
+    #         Processed result in any format (dict, list, scalar, …).
+    #     """
+    #     pass

@@ -7,36 +7,209 @@ Both operations rely on edge gateway communication, but they conceptually merge 
 ---
 
 ## 1. High-Level Flow Diagram
-
 ```mermaid
-flowchart TD
-    %% Triggers
-    Timer([Timer Loop]) -->|Triggers| Poll(poll_gateways)
-    Operator([Operator API]) -->|Triggers| SendCmd(send_command_to_sensors)
+flowchart TD  
+%% Application Entry Point
+	subgraph "Application Entry Point"  
+		App{{app.py}}  
+		Server([Flask])
+		Poll[GatewayPoller]
+		API{{OperatorAPI}}
+		Service[services.py]
+		Consumer[IngestionWorker]
+		QIngest[(IngestionQueue)]
+		
+		
+		App -->|Run| Server 
+		Server --> |Operator HTTP requests| API
+		Server --> |INIT| QIngest
+		App -.-> |Starts poller| Poll --> |PUT| QIngest
+		App -.-> |Starts consumer| Consumer
+		App -.-> |Start services| Service
+		QIngest --> |GET| Consumer
+		
+		
+	end 
 
-    subgraph "client_http.py (Edge Communication)"
-        Poll --> HTTP_GET[GET /data]
-        SendCmd --> HTTP_POST[POST /command]
-        
-        HTTP_GET --> Normalize[ _normalize_result ]
-        HTTP_POST --> Normalize
-    end
+%% OPERATOR_API MODULE
+	subgraph "operator_api.py"
+		CMD_SEND[CommandDispatcher]
+		SensSend[[send_command]]
+		S[[POST /command/send]]
+		cmdHTTP[[_send_command_to_*]]
+		
+		API --> S --> CMD_SEND --> SensSend --> cmdHTTP --> S --> |PUT| QIngest
+	end
+	
+%% CLIENT_HTTP MODULE
+	subgraph "client_http.py (Edge Communication)"  
+		HTTP_GET[[poll_gateway]]  
+		HTTP_POST[[send_command_to*]]
+		N[[normalize_result]]
+		  
+		Poll --> |loop| HTTP_GET  
+		cmdHTTP --> HTTP_POST  
+		HTTP_GET --> N --> HTTP_GET --> |Returns standardized dict| Poll 
+		HTTP_POST --> N --> HTTP_POST -->|Returns standardized dict| cmdHTTP
+	end    
 
-    subgraph "data_ingestion.py (Data Processing)"
-        Normalize -->|Standardized Dict| Ingest[ingest_edge_results]
-        
-        Ingest --> Split{Process Gateway & Records}
-        Split -->|1. Event Sourcing| History[save_history_event]
-        Split -->|2. State Sync| DR[update_dr / add_dr]
-        
-        DR -->|Missing DR| Factory[_create_*_dr_entry]
-        Factory -->|Validate| DRFactory[dr_factory.py]
-    end
+%% DATA INGESTION MODULE
+	subgraph "data_ingestion.py (Data Processing)"
+		Ingest[[ingest_edge_results]]
+		AnDetector[[anomaly_detector]]
+		Split{Process Gateway & Records}
+		History[[save_history_event]]
+		DR[[update_dr / add_dr]]
+		DTS[[add_sensor_replicas]]
+	 
+		Consumer ==> Ingest
+		Ingest ==> AnDetector   
+		AnDetector ==>|set the alert_level field| Split  
+		Split ==>|1 - Event Sourcing| History  
+		Split ==>|2 - DR Sync| DR
+		Split ==>|3 - DT Sync| DTS
+		
+		
+		
+	end  
+	  
+	subgraph "database_service.py (Storage)"  
+		History ==> MongoDB_Hist[(History Collection)]  
+		DR ==> MongoDB_DR[(Device Collection)]  
+		DTS==>MongoDB_DT[(DT Collection)]
 
-    subgraph "database_service.py (Storage)"
-        History --> MongoDB_Hist[(History Collection)]
-        DR --> MongoDB_DR[(Device / Sensor Collections)]
-    end
+	end  
+	%% --- Legend Section --- 
+	subgraph Legend ["Diagram Legend: Component Shapes"]
+		direction LR 
+		L_Srv([Stadium Shape]) --> L_Srv_T[Server / Host] 
+		L_Mod{{Hexagon}} --> L_Mod_T[Module / Package] 
+		L_Cls[Rectangle] --> L_Cls_T[Class / Object] 
+		L_Fn[[Double Box]] --> L_Fn_T[Function / Method] 
+		
+	end
+	
+%% --- Styling the Legend (Optional) --- 
+style Legend fill:#fcfcfc,stroke:#333,stroke-dasharray: 5 5
+
+%% Apply Colors at the very bottom 
+	%% green forward
+	linkStyle 0,1,8,9,10,11,15,19,2 stroke:#2ecc71,stroke-width:3.5px; 
+	%% green backward
+	linkStyle 20,21,12,13 stroke:#2ecc71,stroke-width:1.5px; 
+	
+	%% red forward
+	linkStyle 3,14,16 stroke:#e67e22,stroke-width:3.5px;
+	%% red backward
+	linkStyle 4,17,18 stroke:#e67e22,stroke-width:1.5px;
+	
+	%% blue
+	linkStyle 5,7 stroke:#2222e6,stroke-width:3.5px;
+	
+	%% fucsia #2222e6
+	
+```
+## 2. Detailed-Level Flow Diagram
+
+```mermaid  
+flowchart TD  
+%% Application Entry Point
+	subgraph "Application Entry Point"  
+		App{{app.py}}  
+		Server([Flask])
+		Poll[GatewayPoller]
+		API{{OperatorAPI}}
+		Services{{services.py}}
+		Consumer[IngestionWorker]
+		
+		App -->|Run| Server 
+		Server --> |Listen for HTTP requests| API
+		App -.-> |Starts poller| Poll  
+		App -.-> |Starts consumer| Consumer
+		Poll -->|Loop every *n* seconds| Poll
+		
+		Poll --> Services
+		
+	end 
+	
+%% OPERATOR_API MODULE
+	subgraph "operator_api.py"
+		CMD_SEND[CommandDispatcher]
+		SensSend[[send_command]]
+		S[[POST /command/send]]
+		cmdHTTP[[_send_command_to_*]]
+		
+		API --> S --> CMD_SEND --> SensSend --> cmdHTTP --> S
+	end
+	
+%% CLIENT_HTTP MODULE
+	subgraph "client_http.py (Edge Communication)"  
+		HTTP_GET[[poll_gateway]]  
+		HTTP_POST[[send_command_to*]]
+		N[[normalize_result]]
+		  
+		Poll --> HTTP_GET  
+		cmdHTTP --> HTTP_POST  
+		HTTP_GET --> N --> HTTP_GET --> |Returns standardized dict| Poll 
+		HTTP_POST --> N --> HTTP_POST -->|Returns standardized dict| cmdHTTP
+	end    
+
+%% DATA INGESTION MODULE
+	subgraph "data_ingestion.py (Data Processing)"
+		Ingest[[ingest_edge_results]]
+		AnDetector[[anomaly_detector]]
+		Split{Process Gateway & Records}
+		History[[save_history_event]]
+		DR[[update_dr / add_dr]]
+		DTS[[add_sensor_replicas]]
+		
+		Poll -->|Calls after receiving result| Ingest  
+		S-->Ingest
+		Ingest ==> AnDetector   
+		AnDetector ==>|set the alert_level field| Split  
+		Split ==>|1 - Event Sourcing| History  
+		Split ==>|2 - DR Sync| DR
+		Split ==>|3 - DT Sync| DTS
+		
+		
+		
+	end  
+	  
+	subgraph "database_service.py (Storage)"  
+		IngestionDone{Return}
+		History ==> MongoDB_Hist[(History Collection)]  
+		DR ==> MongoDB_DR[(Device Collection)]  
+		DTS==>MongoDB_DT[(DT Collection)]
+		MongoDB_Hist ==> IngestionDone
+		MongoDB_DR ==> IngestionDone
+		MongoDB_DT ==> IngestionDone
+		IngestionDone --> Poll
+	end  
+	%% --- Legend Section --- 
+	subgraph Legend ["Diagram Legend: Component Shapes"]
+		direction LR 
+		L_Srv([Stadium Shape]) --> L_Srv_T[Server / Host] 
+		L_Mod{{Hexagon}} --> L_Mod_T[Module / Package] 
+		L_Cls[Rectangle] --> L_Cls_T[Class / Object] 
+		L_Fn[[Double Box]] --> L_Fn_T[Function / Method] 
+	end
+	
+%% --- Styling the Legend (Optional) --- 
+style Legend fill:#fcfcfc,stroke:#333,stroke-dasharray: 5 5
+
+%% Apply Colors at the very bottom 
+	%% green forward
+	linkStyle 0,1,2,6,7,8,11,15 stroke:#2ecc71,stroke-width:3.5px; 
+	%% green backward
+	linkStyle 16,17,9,19 stroke:#2ecc71,stroke-width:1.5px; 
+	
+	%% red forward
+	linkStyle 3,14,16 stroke:#e67e22,stroke-width:3.5px;
+	%% red backward
+	linkStyle 17,18 stroke:#e67e22,stroke-width:1.5px;
+	
+	%% blue
+	linkStyle 5 stroke:#2222e6,stroke-width:3.5px;
 ```
 
 ---
@@ -119,3 +292,69 @@ The Database Service abstracts MongoDB and utilizes the `SchemaRegistry` to rout
 > [!TIP]
 > **Why this architecture is powerful:**
 > Because both telemetry polling and active commands funnel into the exact same normalization logic, any new features, machine-learning models, or databases added to `data_ingestion.py` will automatically benefit both data collection methods without duplicating code.
+
+
+
+```mermaid
+flowchart TD
+    subgraph Edge Communication
+        A((Trigger)) -->|Invokes| B(poll_gateways)
+        B -->|HTTP GET| C[Edge Gateways]
+        C -->|Returns JSON| D[edge_results Payload]
+    end
+
+    subgraph Data Ingestion Service
+        D --> E(ingest_edge_results)
+        E -->|Validates| F{Pydantic EdgeResults}
+        
+        F --> G{For each Gateway}
+        
+        %% Gateway Failure Path
+        G -->|Failure / Timeout| H[Save 'inactive' Gateway History]
+        H --> I[Update Gateway DR as 'inactive']
+        I --> Y
+        
+        %% Gateway Success Path
+        G -->|Success| J[Save 'active' Gateway History]
+        J --> K{For each Device}
+        
+        %% Sensor Path
+        K -->|Is Sensor| L[Save Sensor History]
+        L --> M{Find Sensor DR}
+        M -->|Not Found| N[Auto-Create Sensor DR]
+        M -->|Found| O[Update Sensor DR value/status]
+        N --> O
+        
+        %% Actuator Path
+        K -->|Is Actuator| P[Save Actuator History]
+        P --> Q{Find Actuator DR}
+        Q -->|Not Found| R[Auto-Create Actuator DR]
+        Q -->|Found| S[Update Actuator DR state/command]
+        R --> S
+        
+        %% Device Loop
+        O --> T((Next Device))
+        S --> T
+        T --> K
+        
+        %% Gateway DR Linking
+        K -->|All Devices Processed| U[Append new sensors/actuators to Gateway DR]
+    end
+
+    subgraph DB & Digital Twin Orchestration
+        U --> V(dt_factory.add_digital_replicas)
+        V --> W[(MongoDB & Active Twin Context)]
+        
+        %% Gateway Loop
+        W --> Y((Next Gateway))
+        Y --> G
+    end
+    
+    G -->|All Gateways Processed| Z([End Data Flow])
+
+    %% Styling
+    classDef service fill:#f9f,stroke:#333,stroke-width:2px;
+    classDef db fill:#bbf,stroke:#333,stroke-width:2px;
+    class E,V service;
+    class W db;
+```

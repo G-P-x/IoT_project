@@ -1,8 +1,10 @@
 import asyncio
+import logging
 from flask import Blueprint, jsonify, request
 from telegram import Update
 from config.config import Config
 
+logger = logging.getLogger(__name__)
 webhook = Blueprint("webhook", __name__)
 application = None
 allowed_keys = {"text", "time_stamp", "temperature", "wind", "air_quality"}
@@ -25,7 +27,11 @@ def telegram_webhook():
         update = Update.de_json(request.get_json(), application.bot)
         loop = application.bot_data["loop"]
         fut = asyncio.run_coroutine_threadsafe(application.process_update(update), loop)
-        fut.result()  # wait for processing to finish, but doesn't block the event loop
+        try:
+            fut.result()  # wait for processing to finish, but doesn't block the event loop
+        except Exception as exc:
+            logger.exception("Failed to process Telegram webhook update")
+            raise
 
     return "OK"
 
@@ -67,6 +73,10 @@ def notify():
         application.bot.send_message(chat_id=GROUP_CHAT_ID, text=txt),
         loop
     )
-    fut.result()  # raises if Telegram fails (useful for debugging)
+    try:
+        fut.result()  # raises if Telegram fails (useful for debugging)
+    except Exception as exc:
+        logger.exception("Telegram notification failed")
+        return jsonify({"ok": False, "error": str(exc)}), 500
 
     return jsonify({"ok": True})

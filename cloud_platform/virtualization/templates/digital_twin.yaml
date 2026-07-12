@@ -9,67 +9,56 @@
 schemas:
   common_fields:
     _id: str                           # ID univoco del Twin (es. "twin_etna_nord")
-    profile:
-      name: str                        # Nome logico della stazione (es. "Stazione Etna Nord")
-      primary_gateway_id: str          # MAC del gateway principale di questa stazione
-      location: str                    # Posizione (es. "Mt. Etna - North face"), opzionale
-      description: str                 # Opzionale
+    name: str                          # Nome univoco del Twin (es. "Stazione Etna Nord")
+    description: str                   # Descrizione del Twin (es. "Stazione Etna Nord") 
     metadata:
       created_at: datetime             # Creazione del contenitore Digital Twin
-      last_system_update: datetime     # Ultimo aggiornamento di QUALSIASI componente
-      overall_status: str              # Stato globale (es. "ok", "warning", "offline")
+      updated_at: datetime             # Ultimo aggiornamento di QUALSIASI componente
+      status: str                      # Stato globale (es. "ok", "warning", "offline") 
+    services:               # Lista degli ID dei servizi associati al Twin 
+      - name: str                        # Nome del servizio (es. "temperature_monitoring")
+        config: Dict                     # Configurazione del servizio (es. "Monitora la temperatura")
+        status: str                      # Stato del servizio (es. "running", "stopped", "error")
+        added_at: datetime | None        # Timestamp dell'ultima esecuzione del servizio
+    sensors:                  # lista dei digital replica associati al twin
+      - _id_document: str              # ID univoco del DR
+        dr_type: str                   # DR type identifier (es. "sensor")
+        device_id: str                # Identificatore fisico del sensore
+        device_type: str              # Tipo di sensore (es. "temperature", "humidity", "pressure")
+        current_value: str | None #       # Valore corrente del sensore (es. "23.5 °C")
+        threshold: float | None
+        alert_level: str              # Livello di allerta  
+    actuators:                # lista dei digital replica associati al twin
+      - _id_document: str              # ID univoco del DR
+        dr_type: str                   # DR type identifier (es. "actuator")
+        device_id: str                # Identificatore fisico dell'attuatore
+        device_type: str              # Tipo di attuatore (es. "siren", "valve", "camera", "light", "relay")
+        available_commands: List[str] | None   # Lista dei comandi disponibili per l'attuatore 
 
-  entity:
-    state:
-      gateway:
-        status: str                    # Copia dello stato attuale del gateway
-        last_heartbeat: str            # ISO timestamp
-      
-      # Usiamo un Dizionario (Mappa) indicizzato per device_id o _id del sensore
-      # Questo permette aggiornamenti O(1) su MongoDB via dot-notation
-      sensors: Dict[str, dict]         
-        # Esempio del contenuto interno al dizionario per singola chiave:
-        # current_value: float | None
-        # status: str
-        # last_update: datetime
-      
-      actuators: Dict[str, dict]
-        # Esempio del contenuto interno:
-        # current_command: str
-        # status: str
-        # last_update: datetime
+    
 
   validations:
     mandatory_fields:
       root:
         - _id
-      profile:
         - name
-        - primary_gateway_id
       metadata:
         - created_at
-        - last_system_update
-        - overall_status
-      entity.state:
-        - gateway
-        - sensors
-        - actuators
+        - updated_at
+        - status
 
     type_constraints:
-      overall_status:
+      status:
         type: str
         enum: ["OK", "OFFLINE", "MAINTENANCE", "WARNING", "CRITICAL"]
-      sensors:
-        type: dict  # Chiave: Sensor ID, Valore: Oggetto stato sensore
-      actuators:
-        type: dict  # Chiave: Actuator ID, Valore: Oggetto stato attuatore
 
     initialization:
+      root:
+        name: "etna"
+        description: "default"
+        services: []
+        sensors: []
+        actuators: []
+        digital_replicas: []
       metadata:
-        overall_status: "OK"
-      entity.state:
-        gateway:
-          status: "inactive"
-          last_heartbeat: null
-        sensors: {}
-        actuators: {}
+        status: "OK"

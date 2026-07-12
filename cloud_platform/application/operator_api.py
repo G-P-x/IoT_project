@@ -2,14 +2,17 @@ from flask import Blueprint, current_app, jsonify, request
 from flask import render_template
 from cloud_platform.types.edge import EdgeResults, DeviceResult
 from cloud_platform.application import client_http
-from cloud_platform.services.data_ingestion import ingest_edge_results
 from pydantic import BaseModel, ValidationError
 from typing import Literal
-from concurrent.futures import ThreadPoolExecutor
+
+## ThreadPoolExecutor for background ingestion tasks
+from cloud_platform.types.queues import IngestionQueueItem, DispatchQueueItem, HistoryQueueItem
+import queue
 
 # ── Imports for Mock data for testing (delete in production) ──────────────────────────────────
 from datetime import datetime, timedelta
 import random
+import logging
 
 # This file defines the operator API routes and their handlers.
 # An operator can use these routes to view telemetry data, health events, and send commands to the DT.
@@ -20,8 +23,7 @@ import random
 # 5. View current state of the DT (latest telemetry, health status, etc.)
 # 6. View sensor status and diagnostics
 
-# executor for returning results to the frontend without waiting for  database ingestion to complete
-_executor = ThreadPoolExecutor(max_workers=2)
+logger = logging.getLogger(__name__)
 
 # ────────────────── Command Dispatcher ──────────────────
 class CommandDispatcher:
@@ -33,7 +35,7 @@ class CommandDispatcher:
         self.client = client_http
         self.commands_map = {
             "cmd_01": self._send_command_to_sensors,
-            "cmd_02": self._send_command_to_actuators
+            # "cmd_02": self._send_command_to_actuators # da eliminare (matteo implementa la logica di attivazione dell'allarme localmente)
         }
 
     def send_command(self, command: str, target: dict[str, list[str]]) -> dict:
@@ -128,80 +130,109 @@ bp_operator = Blueprint("operator_api", __name__, url_prefix="/operator")
 def home():
     return jsonify({"message": "Welcome to the Operator API. Use /operator/history/<parameter> to view telemetry history and /operator/commands/send to send commands to the DT."})
 
-@bp_operator.route("/commands", methods=["POST"])
+@bp_operator.route("/change_poll_interval", methods=["PUT"])
 def commands():
     # Retrieve the JSON data from the request body
     data = request.get_json()
-
-    # Accessing the fields
-    command_id = data.get("command_id")
-    issued_by = data.get("issued_by")
-    target = data.get("target")
-
-    # Example: Process the data here...
-    print(f"Received command {command_id} from {issued_by}")
+    try:
+        new_interval = int(data.get("poll_interval"))
+        logger.info(f"new poll interval arrived: {new_interval}")
+        result = current_app.config["GATEWAY_POLLER"].update_interval(new_interval)
+    except ValueError as e:
+        logger.error(e)
+        return jsonify({
+            "status":"error",
+            "message":"invalid"
+        }), 400
 
     # Return a success response
     return jsonify({
         "status": "success",
-        "message": f"Command {command_id} received successfully"
+        "message": result,
     }), 200
 
 
-@bp_operator.route("/history/<parameter>", methods=["GET"])
-def get_history(parameter: str):
-    """
-    Accessed via GET request to /operator/history/temperature?twin_id=etna_01&limit=100
-    The request is sent from the frontend through the javascript code in history.html,
-    which extracts the parameter, twin_id, and limit from the user input and sends the 
-    request to this endpoint. 
-    The handler then retrieves the data from the DTService and returns it as JSON.
-    """
+@bp_operator.route("/history", methods=["POST"])
+def query_history():
+    try:
+        data:dict = request.get_json()
+        q : queue.Queue = current_app.config.get("HISTORY_QUEUE")
+        operator:str = data.get("operator_id")
+        query:dict = data.get("query")
+        logger.info(f"received queryin in Operator Route: {query}")
+        q.put(HistoryQueueItem(stop_signal=False, operator_id=operator, query=query))
+        logger.info(f"task in queue: {q}")
+        return jsonify({
+            "status":"on going",
+            "message":"your request is being processed..."
+        }), 200
+    except KeyError as e:
+        logger.error(e)
+        return jsonify({
+            "status":"error",
+            "message":"malformed request"
+        }), 400
+    except Exception as e:
+        logger.error(e)
+        return jsonify({
+            "status":"error",
+            "message":"invalid"
+        }), 400
 
-    twin_id = request.args.get("twin_id") or current_app.config["DEFAULT_TWIN_ID"]
-    sensor_id = request.args.get("sensor_id")          # optional sensor filter
-    date_from = request.args.get("from")                # ISO datetime string
-    date_to = request.args.get("to")                    # ISO datetime string
-    # dt = current_app.extensions["dt_service"]
-    # return jsonify(dt.get_history(twin_id, parameter, sensor_id=sensor_id, date_from=date_from, date_to=date_to))
+# @bp_operator.route("/history/<parameter>", methods=["GET"])
+# def get_history(parameter: str):
+#     """
+#     Accessed via GET request to /operator/history/temperature?twin_id=etna_01&limit=100
+#     The request is sent from the frontend through the javascript code in history.html,
+#     which extracts the parameter, twin_id, and limit from the user input and sends the 
+#     request to this endpoint. 
+#     The handler then retrieves the data from the DTService and returns it as JSON.
+#     """
 
-    # ── Mock data for testing ──────────────────────────────────────────
+#     twin_id = request.args.get("twin_id") or current_app.config["DEFAULT_TWIN_ID"]
+#     sensor_id = request.args.get("sensor_id")          # optional sensor filter
+#     date_from = request.args.get("from")                # ISO datetime string
+#     date_to = request.args.get("to")                    # ISO datetime string
+#     # dt = current_app.extensions["dt_service"]
+#     # return jsonify(dt.get_history(twin_id, parameter, sensor_id=sensor_id, date_from=date_from, date_to=date_to))
 
-    sensors_map = {
-        "temperature":   ["temp_01", "temp_02"],
-        "air_quality":   ["aq_01",   "aq_02"],
-        "seismic_waves": ["s_01",    "s_02"],
-    }
-    units_map = {
-        "temperature": "°C",
-        "air_quality": "AQI",
-        "seismic_waves": "mm/s",
-    }
-    sensors = [sensor_id] if sensor_id else sensors_map.get(parameter, ["sensor"])
-    unit = units_map.get(parameter, "")
+#     # ── Mock data for testing ──────────────────────────────────────────
 
-    # Parse date range
-    dt_from = datetime.fromisoformat(date_from) if date_from else datetime.utcnow() - timedelta(days=7)
-    dt_to = datetime.fromisoformat(date_to) if date_to else datetime.utcnow()
-    total_seconds = (dt_to - dt_from).total_seconds()
+#     sensors_map = {
+#         "temperature":   ["temp_01", "temp_02"],
+#         "air_quality":   ["aq_01",   "aq_02"],
+#         "seismic_waves": ["s_01",    "s_02"],
+#     }
+#     units_map = {
+#         "temperature": "°C",
+#         "air_quality": "AQI",
+#         "seismic_waves": "mm/s",
+#     }
+#     sensors = [sensor_id] if sensor_id else sensors_map.get(parameter, ["sensor"])
+#     unit = units_map.get(parameter, "")
 
-    # ~24 samples per day, at least 2
-    num_points = max(2, int((total_seconds / 86400) * 24))
+#     # Parse date range
+#     dt_from = datetime.fromisoformat(date_from) if date_from else datetime.utcnow() - timedelta(days=7)
+#     dt_to = datetime.fromisoformat(date_to) if date_to else datetime.utcnow()
+#     total_seconds = (dt_to - dt_from).total_seconds()
 
-    # Evenly spaced timestamps across the range
-    step = total_seconds / (num_points - 1) if num_points > 1 else 0
+#     # ~24 samples per day, at least 2
+#     num_points = max(2, int((total_seconds / 86400) * 24))
 
-    mock_data = [
-        {
-            "ts": (dt_from + timedelta(seconds=i * step)).isoformat(),
-            "value": round(random.uniform(18.0, 35.0), 2),
-            "unit": unit,
-            "sensor_id": s,
-        }
-        for s in sensors
-        for i in range(num_points)
-    ]
-    return jsonify(mock_data)
+#     # Evenly spaced timestamps across the range
+#     step = total_seconds / (num_points - 1) if num_points > 1 else 0
+
+#     mock_data = [
+#         {
+#             "ts": (dt_from + timedelta(seconds=i * step)).isoformat(),
+#             "value": round(random.uniform(18.0, 35.0), 2),
+#             "unit": unit,
+#             "sensor_id": s,
+#         }
+#         for s in sensors
+#         for i in range(num_points)
+#     ]
+#     return jsonify(mock_data)
 
 
 @bp_operator.route("/commands/send", methods=["POST"])
@@ -223,14 +254,13 @@ def send():
     # Dispatch the command to the appropriate edge devices
     edge_results = dispatcher.send_command(command=command_id, target=target)
 
-    # Here I should do two steps:
-    # 1. return the results to the frontend
-    # 2. save the results to the database for historical analysis and visualization in the frontend
-
-    # Fire-and-forget DB save without blocking the response to the frontend
-    print(f"Submitting edge results to executor for database ingestion: {edge_results}")
-    _executor.submit(ingest_edge_results, current_app.config.get("DB_SERVICE"), edge_results, submitter=operator_id, command=command_id)
-    return jsonify(edge_results), 200
+    if edge_results:
+        ingestion_queue : queue.Queue = current_app.config.get("INGESTION_QUEUE")
+        ingestion_queue.put(IngestionQueueItem(priority=1, item={"edge_results": edge_results, "command_id": command_id, "operator_id": operator_id, "target": target}))
+        return jsonify(edge_results), 200
+    else:
+        return jsonify({"status": "error", "message": "Failed to send command to edge devices"}), 502        
+    
 
 def register_operator_routes(app):
     app.register_blueprint(bp_operator)
