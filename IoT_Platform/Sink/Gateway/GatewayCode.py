@@ -1,284 +1,349 @@
-import json
-import threading
-import time
-import os
-from datetime import datetime, timezone
-from collections import deque
-from threading import Thread, Event
+#11_07_2026
+"""
+GatewayCode.py — Gateway IoT per il monitoraggio vulcanico
+===========================================================
+Ponte tra il nodo IoT (NodeMCU ESP8266) e il server cloud.
+Opera su due canali paralleli in thread separati:
 
-import paho.mqtt.client as mqtt
-from flask import Flask, request, jsonify
+  1. Client MQTT (thread daemon): riceve i dati dell'ESP su iot/sensors,
+     li archivia in una sliding window e analizza le anomalie critiche.
+     NOTA: l'attivazione automatica del LED e' disabilitata (commentata).
+     Il LED risponde solo ai comandi espliciti via POST /command.
 
-# ================= LOAD CONFIG =================
-# Load configuration from config.json in the same directory as this script.
-# To change the gateway IP, MQTT host, or any other parameter,
-# edit config.json — no code changes required.
+  2. Server HTTP Flask (thread principale): espone 4 endpoint REST per
+     interrogare i dati o inviare comandi all'ESP.
+
+Topic MQTT:
+  iot/sensors       <- ESP pubblica dati periodici (ogni 5s)
+  iot/sensors/cmd   <- ESP risponde a cmd_01 on-demand
+  iot/cmd           -> Gateway pubblica comandi verso ESP
+
+Config esterna: config.json (nessun valore hardcoded in questo file).
+"""
+
+import json         # Serializzazione/deserializzazione JSON
+import threading    # Mutex (Lock) per accesso thread-safe alle variabili condivise
+import time         # sleep() per attendere che MQTT si connetta prima di Flask
+import os           # os.path per costruire il percorso assoluto di config.json
+from datetime import datetime, timezone  # Generazione timestamp UTC ISO-8601
+from collections import deque            # deque con maxlen per la sliding window
+from threading import Thread, Event      # Thread per MQTT, Event per sincronizzazione cmd_01
+
+import paho.mqtt.client as mqtt   # Client MQTT per Python
+from flask import Flask, request, jsonify  # Framework HTTP REST
+
+# =============================================================
+# CARICAMENTO CONFIGURAZIONE ESTERNA
+# =============================================================
+# Tutti i parametri sono in config.json: nessun valore hardcoded qui.
+# Modifica config.json per cambiare IP, porte o dimensione sliding window.
+
+# Costruisce il percorso assoluto di config.json nella stessa cartella di questo file
 _CONFIG_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "config.json")
 
-with open(_CONFIG_PATH, "r") as f:
-    _cfg = json.load(f)
+with open(_CONFIG_PATH, "r") as f:  # Apre il file di configurazione
+    _cfg = json.load(f)             # Carica il JSON come dizionario Python
 
-GATEWAY_IP  = _cfg["gateway_ip"]
-MQTT_HOST   = _cfg["mqtt_host"]
-MQTT_PORT   = _cfg["mqtt_port"]
-HTTP_PORT   = _cfg["http_port"]
-WINDOW_SIZE = _cfg["window_size"]
-CMD_TIMEOUT = _cfg["cmd_timeout"]
-TOPIC_AUTO  = _cfg["topic_auto"]
-TOPIC_CMD   = _cfg["topic_cmd"]
-TOPIC_PUB   = _cfg["topic_pub"]
+GATEWAY_IP  = _cfg["gateway_ip"]   # IP del PC gateway (usato solo nei log di avvio)
+MQTT_HOST   = _cfg["mqtt_host"]    # IP del broker Mosquitto
+MQTT_PORT   = _cfg["mqtt_port"]    # Porta MQTT (default: 1883)
+HTTP_PORT   = _cfg["http_port"]    # Porta del server Flask (es. 8080)
+WINDOW_SIZE = _cfg["window_size"]  # Numero massimo di record nella sliding window
+CMD_TIMEOUT = _cfg["cmd_timeout"]  # Secondi di attesa per la risposta a cmd_01
+TOPIC_AUTO  = _cfg["topic_auto"]   # Topic dati periodici: "iot/sensors"
+TOPIC_CMD   = _cfg["topic_cmd"]    # Topic risposte on-demand: "iot/sensors/cmd"
+TOPIC_PUB   = _cfg["topic_pub"]    # Topic comandi verso ESP: "iot/cmd"
 
-# ================= SHARED STATE =================
-data_window    = deque(maxlen=WINDOW_SIZE)
-_lock          = threading.Lock()
-_last_esp_data = []
-_mqtt_client   = None
-_alarm_active  = False
+# =============================================================
+# STATO CONDIVISO TRA THREAD
+# =============================================================
+# Queste variabili sono accedute da entrambi i thread (MQTT e Flask).
+# Ogni accesso in scrittura e' protetto da _lock per evitare race condition.
 
-_cmd_event    = Event()
-_cmd_response = []
+data_window    = deque(maxlen=WINDOW_SIZE)  # Sliding window: conserva gli ultimi N record
+_lock          = threading.Lock()           # Mutex per accesso thread-safe
+_last_esp_data = []                         # Cache: ultimo batch ricevuto dall'ESP (4 record)
+_mqtt_client   = None                       # Riferimento al client MQTT (usato da Flask per publish)
+_alarm_active  = False                      # True = allarme attualmente attivo (evita log ripetuti)
 
-# Soglie ricevute dall'ESP — aggiornate ad ogni messaggio periodico
-_node_thresholds = {}
+# Sincronizzazione per cmd_01 tra thread MQTT e thread Flask
+_cmd_event    = Event()  # Event: set() da on_message(), wait() da receive_command()
+_cmd_response = []       # Buffer: contiene la risposta ESP a cmd_01
 
-
-
+# Errori hardware noti: condizioni transitorie normali del nodo.
+# Non generano attivazione LED, ma vengono comunque archiviati nella sliding window.
 IGNORED_ERRORS = [
-    "MPU-6050 not available",
-    "Sensor warming up",
+    "MPU-6050 not available",  # Chip non trovato al boot (graceful degradation)
+    "Sensor warming up",       # MQ-135 in fase di preriscaldamento (30s post-boot)
+    "MPU-6050 restarting",    # Chip in reinizializzazione (freeze I2C rilevato)
 ]
 
-# ================= MQTT CLIENT =================
+# =============================================================
+# FUNZIONI DI UTILITA'
+# =============================================================
+
+def _now() -> str:
+    """Restituisce il timestamp UTC corrente in formato ISO-8601 con millisecondi.
+    Esempio output: '2026-07-10T14:30:00.000Z'
+    Usato per il campo time_stamp di ogni record (timestamp del gateway)."""
+    return datetime.now(timezone.utc).isoformat(timespec="milliseconds").replace("+00:00", "Z")
+    # datetime.now(timezone.utc): ora corrente in UTC
+    # .isoformat(timespec="milliseconds"): formato "2026-07-10T14:30:00.000+00:00"
+    # .replace("+00:00", "Z"): sostituisce l'offset UTC con "Z" (notazione standard)
+
+
+# =============================================================
+# CLIENT MQTT — Callback e avvio
+# =============================================================
 
 def on_connect(client, userdata, flags, rc):
-    if rc == 0:
+    """Callback invocata dal thread MQTT alla connessione al broker.
+    rc=0 indica connessione riuscita; altri valori indicano errori."""
+    if rc == 0:  # rc (return code) = 0 significa connessione riuscita
         print(f"[MQTT] Connesso a Mosquitto ({MQTT_HOST}:{MQTT_PORT})")
-        client.subscribe(TOPIC_AUTO)
-        client.subscribe(TOPIC_CMD)
+        client.subscribe(TOPIC_AUTO)  # Iscrive a iot/sensors (dati periodici ESP)
+        client.subscribe(TOPIC_CMD)   # Iscrive a iot/sensors/cmd (risposte cmd_01)
         print(f"[MQTT] Iscritto a {TOPIC_AUTO}")
         print(f"[MQTT] Iscritto a {TOPIC_CMD}")
     else:
-        print(f"[MQTT] Connessione fallita rc={rc}")
+        print(f"[MQTT] Connessione fallita rc={rc}")  # Log del codice di errore
 
 
 def on_message(client, userdata, msg):
-    global _last_esp_data, _alarm_active, _cmd_response
+    """Callback invocata dal thread MQTT ad ogni messaggio in arrivo.
+    Gestisce due topic:
+      - TOPIC_AUTO: dati periodici ESP -> aggiorna cache e sliding window
+      - TOPIC_CMD:  risposta ESP a cmd_01 -> sblocca il thread Flask in attesa
+    """
+    global _last_esp_data, _alarm_active, _cmd_response  # Accede alle variabili globali condivise
     try:
-        raw = msg.payload.decode()
-        print(f"\n[MQTT IN] topic={msg.topic}  {len(raw)} byte")
-        decoded = json.loads(raw)
-        print(json.dumps(decoded, indent=2))
+        raw = msg.payload.decode()              # Decodifica i byte del payload MQTT in stringa UTF-8
+        print(f"\n[MQTT IN] topic={msg.topic}  {len(raw)} byte")  # Log: topic e dimensione
+        decoded = json.loads(raw)               # Deserializza la stringa JSON in dizionario Python
+        print(json.dumps(decoded, indent=2))    # Stampa il JSON formattato (indentato di 2 spazi)
 
-        now = _now()
-        records = []
-        if "responses" in decoded:
-            for r in decoded["responses"]:
-                records.append({"time_stamp": now, "record": r})
+        # Trasforma ogni response dell'ESP in un record {time_stamp, record}.
+        # time_stamp = timestamp del gateway (momento di ricezione del messaggio MQTT).
+        # record["timestamp"] = timestamp del sensore sull'ESP (generato da getTimestamp()).
+        now = _now()   # Timestamp del gateway: identico per tutti i record dello stesso batch
+        records = []   # Lista che accumulera' i record trasformati
+        for r in decoded.get("responses", []):       # Itera sulle responses nel payload ESP
+            records.append({"time_stamp": now, "record": r})  # Aggiunge il wrapper {time_stamp, record}
 
-        # Aggiorna le soglie ricevute dall'ESP (solo dal topic periodico)
-        if "thresholds" in decoded and msg.topic == TOPIC_AUTO:
-            with _lock:
-                _node_thresholds[decoded.get("node", "unknown")] = decoded["thresholds"]
-            print(f"[THRESHOLDS] Aggiornate: {decoded['thresholds']}")
-
-        if msg.topic == TOPIC_CMD:
-            with _lock:
-                _cmd_response = records
-            _cmd_event.set()
+        # Risposta a cmd_01: segnala al thread Flask in attesa tramite Event
+        if msg.topic == TOPIC_CMD:           # E' una risposta on-demand (non dati periodici)?
+            with _lock:                      # Acquisisce il mutex per accesso thread-safe
+                _cmd_response = records      # Salva la risposta nel buffer condiviso
+            _cmd_event.set()                 # Sblocca il thread Flask che sta aspettando in wait()
             print(f"[CMD_01] Risposta ricevuta: {len(records)} record(s)")
-            return
+            return                           # Esce: le risposte cmd_01 non vanno nella sliding window
 
-        with _lock:
-            _last_esp_data = records
-        for r in records:
-            data_window.append(r)
+        # Dati periodici: aggiorna cache (ultimo batch) e sliding window (storico)
+        with _lock:                          # Acquisisce il mutex per accesso thread-safe
+            _last_esp_data = records         # Sovrascrive la cache con il batch piu' recente
+        for r in records:                    # Itera su ogni record del batch
+            data_window.append(r)            # Aggiunge alla sliding window (maxlen gestisce l'overflow)
         print(f"[MQTT IN] Cache aggiornata: {len(records)} record(s)")
 
+        # Filtra le anomalie reali escludendo gli errori hardware transitori
         anomalies = [
-            r for r in records
-            if r["record"].get("status") == "ERROR"
-            and not any(
+            r for r in records               # Itera su tutti i record del batch
+            if r["record"].get("status") == "ERROR"  # Considera solo gli errori
+            and not any(                     # Escludi se il messaggio inizia con un errore noto
                 r["record"].get("message", "").startswith(e)
-                for e in IGNORED_ERRORS
+                for e in IGNORED_ERRORS      # Lista degli errori hardware da ignorare
             )
         ]
 
-        critical = [r for r in anomalies
-                    if r["record"].get("severity") == "critical"]
-        warnings = [r for r in anomalies
-                    if r["record"].get("severity") == "warning"]
-
-        if warnings:
-            print(f"[WARNING] {len(warnings)} warning:")
-            for w in warnings:
-                print(f"  - {w['record']['id']}: {w['record']['message']}")
+        critical = [r for r in anomalies if r["record"].get("severity") == "critical"]
+        # Filtra ulteriormente: solo i record con severity "critical" (non "error")
 
         if critical:
             # Level-triggered: riinvia alarm ON ad ogni batch finche'
             # l'anomalia persiste, compensando l'auto-spegnimento del buzzer (3s).
-            if not _alarm_active:
-                _alarm_active = True
+            if not _alarm_active:            # Prima volta che rileva il CRITICAL in questo episodio?
+                _alarm_active = True         # Imposta il flag per evitare log ripetuti
                 print(f"[CRITICAL] {len(critical)} anomalia/e critica/e:")
-                for c in critical:
+                for c in critical:           # Stampa ogni anomalia critica
                     print(f"  - {c['record']['id']}: {c['record']['message']}")
-            client.publish(TOPIC_PUB, json.dumps({"command": "alarm", "buzzer": 1}))
-            print(f"[MQTT OUT] Buzzer ON inviato")
+#            client.publish(TOPIC_PUB, json.dumps({"command": "alarm", "buzzer": 1}))
+#            print("[MQTT OUT] Buzzer ON inviato")
+            # NOTA: le righe sopra sono commentate per disattivare l'allarme automatico.
+            # Il LED si attiva solo via POST /command esplicito dal server cloud.
 
-        elif not critical and _alarm_active:
-            _alarm_active = False
-            client.publish(TOPIC_PUB, json.dumps({"command": "alarm", "buzzer": 0}))
-            print(f"[ANOMALY] Anomalie critiche rientrate, Buzzer OFF inviato")
+        elif _alarm_active:                  # L'anomalia e' rientrata e il flag era attivo?
+            _alarm_active = False            # Resetta il flag allarme
+#            client.publish(TOPIC_PUB, json.dumps({"command": "alarm", "buzzer": 0}))
+#            print("[ANOMALY] Anomalie critiche rientrate, Buzzer OFF inviato")
+            # NOTA: commentato per la stessa ragione sopra (solo controllo remoto)
 
     except Exception as e:
-        print(f"[MQTT IN] Errore: {e}")
+        print(f"[MQTT IN] Errore: {e}")  # Cattura qualsiasi eccezione per evitare crash del thread
 
 
 def on_disconnect(client, userdata, rc):
+    """Callback invocata alla disconnessione dal broker.
+    loop_forever() gestisce automaticamente la riconnessione."""
     print(f"[MQTT] Disconnesso rc={rc}, riconnessione automatica...")
 
 
 def start_mqtt():
-    global _mqtt_client
-    _mqtt_client = mqtt.Client(client_id="gateway")
-    _mqtt_client.on_connect    = on_connect
-    _mqtt_client.on_message    = on_message
-    _mqtt_client.on_disconnect = on_disconnect
-    _mqtt_client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)
-    _mqtt_client.loop_forever()
+    """Avvia il client MQTT in un thread daemon.
+    loop_forever() blocca il thread e gestisce riconnessione e heartbeat."""
+    global _mqtt_client                              # Accede alla variabile globale
+    _mqtt_client = mqtt.Client(client_id="gateway") # Crea client con ID fisso "gateway"
+    _mqtt_client.on_connect    = on_connect          # Registra callback connessione
+    _mqtt_client.on_message    = on_message          # Registra callback messaggi
+    _mqtt_client.on_disconnect = on_disconnect       # Registra callback disconnessione
+    _mqtt_client.connect(MQTT_HOST, MQTT_PORT, keepalive=60)  # Connette al broker (keepalive 60s)
+    _mqtt_client.loop_forever()  # Loop infinito: gestisce I/O MQTT e riconnessione automatica
 
 
-# ================= HTTP SERVER =================
+# =============================================================
+# SERVER HTTP FLASK — Endpoint REST
+# =============================================================
+# Gira nel thread principale; il client MQTT gira in un thread daemon.
+# E' il punto di accesso per il server cloud e gli operatori.
 
-app = Flask(__name__)
+app = Flask(__name__)  # Crea l'applicazione Flask
 
 
 @app.route("/command", methods=["POST"])
 def receive_command():
-    global _cmd_event, _cmd_response
-    cmd = request.json
-    print(f"\n[HTTP IN] POST /command  {cmd}")
-    if not cmd:
-        return jsonify({"error": "Invalid JSON"}), 400
+    """
+    POST /command — Invia un comando all'ESP tramite MQTT.
 
-    command = cmd.get("command", "")
+    Corpo JSON:
+      {"command": "cmd_01", "sensors": ["MAC-t1"]}  -> lettura on-demand
+      {"command": "alarm",  "buzzer": 1}             -> accende LED
+      {"command": "alarm",  "buzzer": 0}             -> spegne LED
 
-    if command == "cmd_01":
-        with _lock:
-            _cmd_response = []
-        _cmd_event.clear()
+    Per cmd_01: usa Event/threading per attendere la risposta ESP (max CMD_TIMEOUT s).
+    Per alarm:  inoltra su MQTT e restituisce la cache corrente.
+    """
+    global _cmd_event, _cmd_response               # Accede alle variabili di sincronizzazione
+    cmd = request.json                             # Legge il corpo JSON della richiesta HTTP
+    print(f"\n[HTTP IN] POST /command  {cmd}")     # Log della richiesta ricevuta
+    if not cmd:                                    # Se il body e' vuoto o non e' JSON valido:
+        return jsonify({"error": "Invalid JSON"}), 400  # Risponde con errore 400 Bad Request
 
-        _mqtt_client.publish(TOPIC_PUB, json.dumps(cmd))
+    command = cmd.get("command", "")              # Estrae il campo "command" dal JSON
+
+    if command == "cmd_01":                        # Comando di lettura on-demand?
+        with _lock:                               # Acquisisce il mutex per thread-safety
+            _cmd_response = []                    # Svuota il buffer della risposta precedente
+        _cmd_event.clear()                        # Resetta l'Event (non segnalato)
+
+        _mqtt_client.publish(TOPIC_PUB, json.dumps(cmd))  # Pubblica il comando su iot/cmd
         print(f"[MQTT OUT] {TOPIC_PUB} -> {cmd}")
         print(f"[CMD_01] Attendo risposta su {TOPIC_CMD} (max {CMD_TIMEOUT}s)...")
 
-        got = _cmd_event.wait(timeout=CMD_TIMEOUT)
+        # Blocca questo thread Flask fino a che on_message() non chiama _cmd_event.set()
+        # oppure fino allo scadere del timeout CMD_TIMEOUT secondi
+        got = _cmd_event.wait(timeout=CMD_TIMEOUT)  # True se segnalato, False se timeout
 
-        if not got or not _cmd_response:
-            now = _now()
+        if not got or not _cmd_response:           # Timeout o risposta vuota?
+            now = _now()                           # Timestamp del momento del timeout
             print("[CMD_01] Timeout")
             return jsonify([{"time_stamp": now, "record": {
-                "status": "ERROR", "severity": "error",
-                "type": "gateway", "id": "gateway",
-                "value": None,
-                "message": f"Timeout {CMD_TIMEOUT}s: ESP non risponde",
-                "timestamp": now
-            }}]), 504
+                "status": "ERROR", "severity": "error",  # Errore di timeout
+                "type": "gateway", "id": "gateway",      # Sorgente: il gateway (non l'ESP)
+                "value": None,                            # Nessun valore disponibile
+                "message": f"Timeout {CMD_TIMEOUT}s: ESP non risponde",  # Messaggio descrittivo
+                "timestamp": now,                         # Timestamp del timeout
+                "threshold": None                         # Nessuna soglia per errori gateway
+            }}]), 504  # 504 Gateway Timeout
 
         print(f"[CMD_01] {len(_cmd_response)} record(s) restituiti")
-        return jsonify(_cmd_response)
+        return jsonify(_cmd_response)  # Restituisce la risposta ricevuta dall'ESP
 
-    _mqtt_client.publish(TOPIC_PUB, json.dumps(cmd))
+    # Tutti gli altri comandi (alarm, ecc.) vengono inoltrati direttamente su MQTT
+    _mqtt_client.publish(TOPIC_PUB, json.dumps(cmd))  # Pubblica il comando su iot/cmd
     print(f"[MQTT OUT] {TOPIC_PUB} -> {cmd}")
 
-    with _lock:
-        cached = list(_last_esp_data)
+    with _lock:                                    # Acquisisce il mutex per thread-safety
+        cached = list(_last_esp_data)             # Copia la cache (ultimo batch ESP)
 
-    if not cached:
+    if not cached:                                 # Cache vuota (ESP non ha ancora pubblicato)?
         now = _now()
         return jsonify([{"time_stamp": now, "record": {
             "status": "ERROR", "severity": "error",
             "type": "gateway", "id": "gateway",
             "value": None,
             "message": "Cache vuota: attendere il primo publish dell'ESP (max 5s)",
-            "timestamp": now
-        }}]), 503
+            "timestamp": now,
+            "threshold": None
+        }}]), 503  # 503 Service Unavailable
 
-    return jsonify(cached)
+    return jsonify(cached)  # Restituisce l'ultimo batch ricevuto dall'ESP
 
 
 @app.route("/data", methods=["GET"])
 def get_data():
-    return jsonify(list(data_window))
+    """GET /data — Restituisce la sliding window completa (max WINDOW_SIZE record).
+    Contiene tutti i record ricevuti dall'ESP, inclusi quelli normali e gli errori.
+    Utile per visualizzare l'andamento storico di tutti i parametri."""
+    return jsonify(list(data_window))  # Converte la deque in lista per la serializzazione JSON
 
 
 @app.route("/anomalies", methods=["GET"])
 def get_anomalies():
+    """GET /anomalies — Restituisce i record con status=ERROR, escludendo
+    gli errori hardware noti (freeze I2C, warmup). Utile per il log anomalie reali."""
     return jsonify([
-        r for r in data_window
-        if r["record"].get("status") == "ERROR"
-        and not any(
+        r for r in data_window                          # Itera su tutta la sliding window
+        if r["record"].get("status") == "ERROR"         # Considera solo i record in errore
+        and not any(                                    # Escludi se il messaggio e' un errore noto
             r["record"].get("message", "").startswith(e)
-            for e in IGNORED_ERRORS
+            for e in IGNORED_ERRORS                     # Lista degli errori hardware da ignorare
         )
-    ])
-
-
-@app.route("/warnings", methods=["GET"])
-def get_warnings():
-    return jsonify([
-        r for r in data_window
-        if r["record"].get("severity") == "warning"
     ])
 
 
 @app.route("/critical", methods=["GET"])
 def get_critical():
+    """GET /critical — Restituisce solo i record con severity=critical.
+    Sottoinsieme di /anomalies: esclude anche gli errori non critici (severity=error)."""
     return jsonify([
-        r for r in data_window
-        if r["record"].get("severity") == "critical"
+        r for r in data_window                          # Itera su tutta la sliding window
+        if r["record"].get("severity") == "critical"   # Solo severity critical
     ])
 
 
-@app.route("/thresholds", methods=["GET"])
-def get_thresholds():
-    """Soglie di configurazione attive sull'ESP."""
-    with _lock:
-        return jsonify(_node_thresholds)
-
-
 def start_http():
+    """Avvia il server Flask nel thread principale (bloccante)."""
     print(f"[HTTP] Server su http://{GATEWAY_IP}:{HTTP_PORT}")
-    app.run(host="0.0.0.0", port=HTTP_PORT, debug=False, use_reloader=False)
+    app.run(host="0.0.0.0",     # Ascolta su tutte le interfacce di rete (non solo localhost)
+            port=HTTP_PORT,     # Porta configurata in config.json
+            debug=False,        # Debug disabilitato in produzione
+            use_reloader=False) # Disabilita il reloader automatico (incompatibile con threading)
 
 
-def _now() -> str:
-    return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
-
-
-# ================= MAIN =================
-if __name__ == "__main__":
+# =============================================================
+# MAIN — Avvio del gateway
+# =============================================================
+if __name__ == "__main__":  # Esegue solo se lo script e' avviato direttamente (non importato)
     print("\n========== GATEWAY BOOT ==========")
-    print(f"  Config: {_CONFIG_PATH}")
+    print(f"  Config: {_CONFIG_PATH}")  # Mostra il percorso del file di configurazione
     print()
     print("  Topic MQTT:")
-    print(f"  {TOPIC_AUTO}     <- dati periodici ESP (ogni 5s)")
-    print(f"  {TOPIC_CMD} <- risposta cmd_01 on-demand")
-    print(f"  {TOPIC_PUB}          -> comandi verso ESP")
+    print(f"  {TOPIC_AUTO}     <- dati periodici ESP (ogni 5s)")   # iot/sensors
+    print(f"  {TOPIC_CMD} <- risposta cmd_01 on-demand")           # iot/sensors/cmd
+    print(f"  {TOPIC_PUB}          -> comandi verso ESP")          # iot/cmd
     print()
     print("  Endpoints HTTP:")
     print(f"  POST /command   -> invia comando all'ESP")
-    print(f"  GET  /data      -> sliding window completa")
+    print(f"  GET  /data      -> sliding window completa (max {WINDOW_SIZE})")
     print(f"  GET  /anomalies -> tutte le anomalie reali")
-    print(f"  GET  /warnings  -> solo warning")
     print(f"  GET  /critical  -> solo critical")
-    print(f"  GET  /thresholds-> soglie attive sull'ESP")
     print()
 
+    # Avvia il client MQTT in un thread daemon (termina con il processo principale)
     Thread(target=start_mqtt, daemon=True).start()
-    time.sleep(2)
+    time.sleep(2)  # Attendi 2s: lascia che MQTT si connetta prima di avviare Flask
 
     print(f"[GATEWAY] HTTP -> http://{GATEWAY_IP}:{HTTP_PORT}")
     print(f"[GATEWAY] MQTT -> {MQTT_HOST}:{MQTT_PORT}")
     print("===================================\n")
 
-    start_http()
+    start_http()  # Avvia Flask nel thread principale (bloccante: non ritorna mai)
