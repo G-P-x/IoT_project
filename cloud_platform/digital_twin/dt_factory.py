@@ -107,6 +107,7 @@ class DTFactory:
     IMPLEMENTED_SERVICES = {
         "AlertingService": "cloud_platform.services.analytics",
         "AggregationService": "cloud_platform.services.analytics",
+        "DashboardVisualization": "cloud_platform.services.analytics",
     }
 
     def __init__(self, name: str, db_service: DatabaseService, schema_registry: SchemaRegistry, dt_schema_path: str = None):
@@ -377,18 +378,27 @@ class DTFactory:
             # For any other error, propagate
             raise Exception(f"Failed to create Digital Twin: {str(e)}")
 
-    def get_dt(self, dt_id: str) -> Optional[Dict]:
+    def get_dt(self, dt_id: str | None = None, dt_name : str | None = None) -> dict:
         """
         Retrieve a DT manifest by _id.
 
         Returns:
             The DT document dict, or None if not found.
         """
-        try:
-            dt_collection = self.db_service.db["digital_twins"]
+        if dt_id is None and dt_name is None:
+            raise TypeError("one between dt_id and name must be indicated!!")
+        if dt_id is not None and dt_name is not None:
+            raise ValueError("Only one between dt_id and name must be initialized")
+
+        dt_collection = self.db_service.db["digital_twins"]
+
+        if dt_collection.find_one({"_id": dt_id}):
             return dt_collection.find_one({"_id": dt_id})
-        except Exception as e:
-            raise Exception(f"Failed to get Digital Twin: {str(e)}")
+        
+        if dt_collection.find_one({"name": dt_name}):
+            return dt_collection.find_one({"name": dt_name})
+        else: 
+            return {}
 
     def list_dts(self) -> List[Dict]:
         """Return all DT manifests."""

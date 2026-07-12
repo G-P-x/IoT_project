@@ -17,7 +17,8 @@ AIR_QUALITY = 3
 logger = logging.getLogger(__name__)
 cfg = Config()
 
-CUSTOM_ERROR_CODE = 104 # code error to use when the request fails and we don't have a response object to get the status code from. 
+FAILED_REQUEST_CODE = 404 # code error to use when the request fails and we don't have a response object to get the status code from. 
+MALFORMED_DATA = 104
 
 def send_alarm():
     pass
@@ -93,7 +94,7 @@ def _send_http_command(url, command, field_devices):
         return {"status": "success", "code": response.status_code, "req_timestamp": datetime.now(timezone.utc).isoformat(), "body": body}
     except requests.RequestException as e:
         logger.error("HTTP notify → %s  failed: %s", url, e)
-        return {"status": "error", "code": CUSTOM_ERROR_CODE, "error": str(e), "req_timestamp": datetime.now(timezone.utc).isoformat()}
+        return {"status": "error", "code": FAILED_REQUEST_CODE, "error": str(e), "req_timestamp": datetime.now(timezone.utc).isoformat()}
 
 
 def send_command_to_sensors(command, target: dict):
@@ -121,7 +122,11 @@ def send_command_to_sensors(command, target: dict):
     field_devices = list(target.values()) if isinstance(target, dict) else [[] for _ in gateway_ids] # get the list of field devices for each gateway from the target dict, or use empty lists if target is not a dict (which means all devices for each gateway)
     # if field_devices is empty for a gateway, the edge device will interpret that as "apply the command to all sensors linked to the gateway", so we can safely use empty lists for the case where target is not a dict (i.e. send to all devices).
 
-    urls = [cfg.EDGE_DEVICES[gateway_id] for gateway_id in gateway_ids] if gateway_ids is not None else list(cfg.EDGE_DEVICES.values()) # gets the list of base URLs for the target gateways, or all configured gateways if target is not a dict.
+    if gateway_ids is not None:
+        urls = [f"{cfg.EDGE_DEVICES[gateway_id]}{cfg.COMMAND_ENDPOINT}" for gateway_id in gateway_ids] # gets the list of base URLs for the target gateways, or all configured gateways if target is not a dict.
+    else:
+        urls = [f"{cfg.EDGE_DEVICES[gateway_id]}{cfg.COMMAND_ENDPOINT}" for gateway_id in list(cfg.EDGE_DEVICES.values())] 
+
     print(f"send_command_to_sensors → Target gateways: {gateway_ids}")
     print(f"send_command_to_sensors → Target field devices: {field_devices}")
     print(f"send_command_to_sensors → Target URLs: {urls}")
@@ -144,11 +149,13 @@ def send_command_to_sensors(command, target: dict):
             gateway_id = future_to_device[future]
             try:
                 response = future.result()
+                logger.info(f"MATTEO RESULTS {response}") # 
                 results[gateway_id] = _normalize_result(response) # Normalize the result into a consistent format for data processing
 
             except Exception as e:
-                print(f"Error sending command to gateway {gateway_id}: {e}")
-                results[gateway_id] = _normalize_result({"status": "error", "code": CUSTOM_ERROR_CODE, "error": str(e), "req_timestamp": datetime.now(timezone.utc).isoformat()})
+                logger.info(f"Error sending command to gateway {gateway_id}: {e}")
+                #
+                results[gateway_id] = _normalize_result({"status": "error", "code": FAILED_REQUEST_CODE, "error": str(e), "req_timestamp": datetime.now(timezone.utc).isoformat()})
                 
     return results
 
@@ -260,9 +267,10 @@ def _poll_gateway(url) -> dict:
         resp.raise_for_status()
         body = resp.json()
         return {"status": "success", "code": resp.status_code, "req_timestamp": datetime.now(timezone.utc).isoformat(), "body": body}
+    
     except requests.RequestException as e:
         logger.error("HTTP poll → %s failed: %s", url, e)
-        return {"status": "error", "code": CUSTOM_ERROR_CODE, "error": str(e), "req_timestamp": datetime.now(timezone.utc).isoformat()}
+        return {"status": "error", "code": FAILED_REQUEST_CODE, "error": str(e), "req_timestamp": datetime.now(timezone.utc).isoformat()}
 
 # Called in the app.py. This function will be used to automatically poll gateways at regular intervals (e.g. every minute) to check for new data or alerts.
 def poll_gateways():
@@ -288,14 +296,13 @@ def poll_gateways():
     for future in as_completed(future_to_gateway):
         gateway_id = future_to_gateway[future]
         try:
-            result = future.result() # Waits for the Future to complete and retrieves its result. 
-            # logger.info(f"{__name__}: Polling gateway '%s' completed with result: %s", gateway_id, result)
+            result = future.result() # Waits for the asynchronous task to complete (_poll_gateway) and retrieves its result. 
             results[gateway_id] = _normalize_result(result) # Store the result in the results dict, keyed by gateway_id. 
             #  Each result is a dict with "status", "code", "body" (if success) or "error" (if error).
         except Exception as e:
             # print(f"Error polling gateway {gateway_id}: {e}")
             logger.error("Polling gateway '%s' failed: %s", gateway_id, str(e))
-            results[gateway_id] = _normalize_result({"status": "error", "code": CUSTOM_ERROR_CODE, "error": str(e), "req_timestamp": datetime.now(timezone.utc).isoformat()})
+            results[gateway_id] = _normalize_result({"status": "error", "code": FAILED_REQUEST_CODE, "error": str(e), "req_timestamp": datetime.now(timezone.utc).isoformat()})
 
     return results
 

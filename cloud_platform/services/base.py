@@ -34,6 +34,7 @@ class BaseService(ABC):
         # This avoids boilerplate in every subclass and keeps the naming
         # consistent across the system.
         self.name = self.__class__.__name__
+        self.priority = 2 # each service has lowest priority by default (2: normal, 1: critical, 0: stop used in app.py)
         self.config = config
 
     @abstractmethod
