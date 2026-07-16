@@ -30,7 +30,7 @@
 // --- GATEWAY (IP del PC nella rete corrente) ---
 // MQTT_HOST_ADDR: IP assegnato dal DHCP al PC gateway. Aggiornare se cambia.
 // MQTT_PORT_NUM:  porta standard MQTT non cifrata (senza TLS).
-#define MQTT_HOST_ADDR  "10.217.191.225"  // Indirizzo IP del broker Mosquitto
+#define MQTT_HOST_ADDR  "10.41.201.225"  // Indirizzo IP del broker Mosquitto
 #define MQTT_PORT_NUM   1883              // Porta MQTT standard (non cifrata)
 
 // --- TIMING ---
@@ -53,7 +53,7 @@
 // Valori oltre i quali ogni sensore genera severity "critical".
 // Calibrare in base al punto di deployment sul vulcano.
 
-#define TEMP_THRESHOLD        60.0f   // [gradi C]  — soglia temperatura: 60C e' conservativo
+#define TEMP_THRESHOLD        35.0f   // [gradi C]  — soglia temperatura: 60C e' conservativo
 #define SEISMIC_THRESHOLD      4.0f   // [m/s^2]    — soglia scostamento dalla baseline
 #define SEISMIC_CRITICAL_MIN   1      // [campioni] — letture consecutive sopra soglia (1=immediato)
 #define AIR_THRESHOLD      10000.0f   // [ppm CO2]  — limite OSHA breve esposizione
@@ -62,6 +62,6 @@
 // Soglia WHO per esposizione 8h: 35 ppb.
 // Il valore SO2 e' generato casualmente correlato con CO2:
 // se CO2 supera soglia hardware (pin D7 HIGH), SO2 supera questa soglia.
-#define SO2_THRESHOLD         35.0f   // [ppb SO2]  — soglia WHO 8h esposizione
+#define SO2_THRESHOLD         30.0f   // [ppb SO2]  — soglia WHO 8h esposizione
 
 #endif  // Fine guardia di inclusione CONFIG_H

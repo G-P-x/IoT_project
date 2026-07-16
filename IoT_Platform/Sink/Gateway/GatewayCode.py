@@ -207,7 +207,9 @@ def start_mqtt():
 
 app = Flask(__name__)  # Crea l'applicazione Flask
 
-
+@app.route("/", methods=["GET"])
+def pian():
+    return jsonify("Ciao")
 @app.route("/command", methods=["POST"])
 def receive_command():
     """
@@ -280,11 +282,16 @@ def receive_command():
 
 @app.route("/data", methods=["GET"])
 def get_data():
-    """GET /data — Restituisce la sliding window completa (max WINDOW_SIZE record).
-    Contiene tutti i record ricevuti dall'ESP, inclusi quelli normali e gli errori.
-    Utile per visualizzare l'andamento storico di tutti i parametri."""
-    return jsonify(list(data_window))  # Converte la deque in lista per la serializzazione JSON
+    """GET /data — Restituisce la sliding window e la svuota immediatamente dopo."""
+    with _lock:  # Acquisisci il mutex per evitare conflitti con il thread MQTT
+        # 1. Copia i dati correnti in una lista locale
+        data_to_return = list(data_window)
 
+        # 2. Svuota la deque originale
+        data_window.clear()
+
+    # 3. Restituisci i dati che hai salvato prima di svuotare
+    return jsonify(data_to_return)
 
 @app.route("/anomalies", methods=["GET"])
 def get_anomalies():
@@ -341,7 +348,7 @@ if __name__ == "__main__":  # Esegue solo se lo script e' avviato direttamente (
     # Avvia il client MQTT in un thread daemon (termina con il processo principale)
     Thread(target=start_mqtt, daemon=True).start()
     time.sleep(2)  # Attendi 2s: lascia che MQTT si connetta prima di avviare Flask
-
+#
     print(f"[GATEWAY] HTTP -> http://{GATEWAY_IP}:{HTTP_PORT}")
     print(f"[GATEWAY] MQTT -> {MQTT_HOST}:{MQTT_PORT}")
     print("===================================\n")
