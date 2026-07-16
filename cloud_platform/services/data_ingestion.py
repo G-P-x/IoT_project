@@ -281,6 +281,8 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
 
     for gateway_id, gtw_data in edge_results.items(): # gateway_id, data: DeviceResult
         assert isinstance(gtw_data, dict), f"Expected dict for device result, got {type(gtw_data)}"
+        raw_records = gtw_data.get("raw_records") or list(gtw_data.get("records", {}).values())
+        latest_records = gtw_data.get("records", {})
 
         # phase 1: create a history record for the gateway with status "inactive" and source "operator" or "telemetry" based on the submitter
         history_entry = _create_gateway_record(gateway_id, gtw_data.get("gateway_info", {}), sub = submitter) # create a history record for the gateway, both in case of success and failure
@@ -316,14 +318,27 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
         sensors = []
         actuators = []
         dt_sensors = []
+        processed_devices = set()
         ## each dr replica store in the DT document share these common fields
         # - _id_document: the _id of the DR document in the database
         # - dr_type: the type of the DR (sensor, actuator, gateway)
         # - device_id: the physical device_id of the sensor/actuator/gateway
         DT_dr_replicas = []
 
-        
-        for device_id, device_data in gtw_data.get("records", {}).items():
+        logger.info("Processing %d raw records for gateway '%s'", len(raw_records), gateway_id)
+        for raw_record in raw_records:
+            try:
+                record_entry = dict(raw_record)
+            except Exception:
+                logger.warning("Skipping malformed raw record for gateway '%s': %s", gateway_id, raw_record)
+                continue
+
+            device_id = record_entry.get("id")
+            if not device_id:
+                logger.warning("Skipping raw record without id for gateway '%s': %s", gateway_id, record_entry)
+                continue
+
+            device_data = latest_records.get(device_id, record_entry)
             try:
                 device_data = dict(device_data)  # Ensure device_data is a dict
 
@@ -331,9 +346,13 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
                 if device_data.get("type") == "sensor":
 
                     ### Phase 1: create a history record for the sensor with status "active" or "inactive" based on the record status and source "operator" or "telemetry" based on the submitter
-                    history_entry = _create_sensor_record(gateway_id, device_id, device_data, sub = submitter)
+                    history_entry = _create_sensor_record(gateway_id, device_id, record_entry, sub = submitter)
                     db_service.save_history_event(history_entry)
                     sensors.append(device_id)
+
+                    if device_id in processed_devices:
+                        continue
+                    processed_devices.add(device_id)
 
                     ### Phase 2: find or create the sensor DR and link it to the gateway DR (if not already linked)
                     dr_entry = _find_dr(db_service, device_id) # find an existing sensor DR by physical sensor_id
@@ -365,9 +384,13 @@ def ingest_edge_results(db_service: DatabaseService, edge_results: Dict[str, Dev
 
                 elif device_data.get("type") == "actuator":
                     # Phase 1: create a history record for the actuator with status "active" or "inactive" based on the record status and source "operator" or "telemetry" based on the submitter
-                    history_entry = _create_actuator_record(gateway_id, device_id, device_data, sub=submitter, command=command)
+                    history_entry = _create_actuator_record(gateway_id, device_id, record_entry, sub=submitter, command=command)
                     db_service.save_history_event(history_entry)
                     actuators.append(device_id)
+
+                    if device_id in processed_devices:
+                        continue
+                    processed_devices.add(device_id)
 
                     # Phase 2: find or create the actuator DR and link it to the gateway DR (if not already linked)
                     dr_entry = _find_dr(db_service, device_id)

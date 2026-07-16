@@ -337,7 +337,6 @@ class GatewayPoller:
             try:
 
                 results: dict = client_http.poll_gateways()
-                logger.info("results = %s", len(results.get("body", [])))
 
                 self.ingestion_queue.put(IngestionQueueItem(priority=2, 
                                                             item={ "edge_results": results,

@@ -23,6 +23,7 @@ class FieldDeviceResult(BaseModel):
 
 class DeviceResult(BaseModel):
     gateway_info: GatewayInfo
+    raw_records: list[dict[str, Any]] | None = None
     records: dict[str, FieldDeviceResult]
 
 class EdgeResults(BaseModel):

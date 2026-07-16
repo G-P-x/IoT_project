@@ -259,25 +259,43 @@ Regardless of whether the data was passively polled or actively requested, the r
 
 ## 3. Phase 2: Data Ingestion (`data_ingestion.py`)
 
-The unified dictionary is passed directly into `ingest_edge_results(db_service, results, ...)`. This module is completely agnostic to *how* the data was collected. It iterates through the dictionary and performs two distinct operations for both the Gateways and the individual Sensors/Actuators.
+The unified dictionary is passed directly into `ingest_edge_results(db_service, results, ...)`. This module is completely agnostic to *how* the data was collected. It now works with two views of the same gateway response:
+
+- `raw_records`: the full list of readings received from the gateway.
+- `records`: the deduplicated map keyed by device id, used for the latest state of each device.
+
+This split is intentional:
+
+- **History Collection** keeps every raw reading, including repeated readings for the same sensor.
+- **Device Collection** and **Digital Twin** keep only the latest reading per device id.
+
+The ingestion flow iterates through the gateway payload and performs two distinct operations for both the Gateways and the individual Sensors/Actuators.
 
 ### Operation 1: Event Sourcing (History)
 Every incoming payload represents an event in time. The system records an immutable log of what happened.
 1. **Gateways:** Calls `_create_gateway_record()` to generate a `gateway_status_event` tracking gateway health and HTTP codes.
-2. **Devices:** Calls `_create_sensor_record()` (or actuator equivalent) to generate a `sensor_reading_event` containing the raw sensor values.
-3. **Storage:** These events are passed to `db_service.save_history_event()`.
+2. **Devices:** Iterates over `raw_records` and calls `_create_sensor_record()` (or actuator equivalent) for every raw reading, even if the same sensor appears multiple times.
+3. **Storage:** These events are passed to `db_service.save_history_event()` one by one, so History preserves all 200 readings.
 
 ### Operation 2: State Synchronization (Digital Replicas)
 The Digital Replicas must reflect the *latest known state* of the edge devices.
 1. **Lookup:** The system calls `_find_dr(db_service, device_id)` to see if the gateway or sensor already exists in the database.
-2. **If DR Exists (Update):**
-   - Extracts the latest `value` and `timestamp`.
-   - Calls `db_service.update_dr()` to perform a partial update (`$set`) on the DR's `data` section and bump the `metadata.last_update` timestamp.
-3. **If DR is Missing (Auto-Creation):**
+2. **Deduplication gate:** The code keeps a `processed_devices` set so each device id updates DR/DT only once per polling cycle.
+3. **If DR Exists (Update):**
+	- Extracts the latest `value` and `timestamp` from `records`.
+	- Calls `db_service.update_dr()` to perform a partial update (`$set`) on the DR's `data` section and bump the `metadata.last_update` timestamp.
+4. **If DR is Missing (Auto-Creation):**
    - Calls `_create_gateway_dr_entry()` or `_create_sensor_dr_entry()`.
    - These functions build the initial `profile` (inferring types, generating names) and pass it to `DRFactory`.
    - The `DRFactory` validates the data against the YAML templates (`gateway.yaml`, `sensor.yaml`), applies defaults, and returns a sanitized dictionary.
    - Finally, `db_service.add_dr()` is called to insert the brand new DR into MongoDB.
+
+### Procedure Summary
+1. `poll_gateways()` or `send_command_to_sensors()` receives the edge response.
+2. `_normalize_result()` stores the full response in `raw_records` and the latest per-device view in `records`.
+3. `ingest_edge_results()` writes every item in `raw_records` into History.
+4. The same function uses `records` to update DRs and the DT only once per device id.
+5. If `raw_records` is missing, ingestion falls back to `records.values()` so the pipeline still works with older payloads.
 
 ---
 
@@ -288,10 +306,6 @@ The Database Service abstracts MongoDB and utilizes the `SchemaRegistry` to rout
 - **`save_history_event(history_event)`**: Inserts the immutable log entry into the history collection defined by `sensor_history.yaml`.
 - **`add_dr(dr_entry)`**: Uses `schema_registry.get_collection_name(dr_type)` to determine the correct MongoDB collection (e.g., `device_collection`). The driver automatically generates the primary `_id` upon `insert_one`.
 - **`update_dr(dr_type, dr_id, update_data)`**: Executes a lightweight `updateOne` operation targeting the specific `_id`, applying the nested `$set` payload, and refreshing the metadata timestamps.
-
-> [!TIP]
-> **Why this architecture is powerful:**
-> Because both telemetry polling and active commands funnel into the exact same normalization logic, any new features, machine-learning models, or databases added to `data_ingestion.py` will automatically benefit both data collection methods without duplicating code.
 
 
 
