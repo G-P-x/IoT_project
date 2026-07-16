@@ -284,7 +284,7 @@ def poll_gateways():
     with ThreadPoolExecutor(max_workers=len(cfg.EDGE_DEVICES) or 1) as executor:
         # Submit one polling task per  gateway
         future_to_gateway = {
-            executor.submit(_poll_gateway, url): gateway_id
+            executor.submit(_poll_gateway, f"{url}{cfg.POLL_ENDPOINT}"): gateway_id
             for gateway_id, url in cfg.EDGE_DEVICES.items()
         }
         # creates a dict mapping Future (an object created by executor.submit) → gateway_id, so we can identify which gateway corresponds 
@@ -297,6 +297,7 @@ def poll_gateways():
         gateway_id = future_to_gateway[future]
         try:
             result = future.result() # Waits for the asynchronous task to complete (_poll_gateway) and retrieves its result. 
+            logger.info(f"records = {len(result['body'])}")
             results[gateway_id] = _normalize_result(result) # Store the result in the results dict, keyed by gateway_id. 
             #  Each result is a dict with "status", "code", "body" (if success) or "error" (if error).
         except Exception as e:

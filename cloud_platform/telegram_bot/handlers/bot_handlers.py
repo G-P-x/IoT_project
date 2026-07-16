@@ -2,6 +2,13 @@ from telegram import Update
 from telegram.ext import ContextTypes
 
 
+async def _reply(update: Update, text: str) -> None:
+    message = update.effective_message
+    if message is None:
+        return
+    await message.reply_text(text, parse_mode="Markdown")
+
+
 async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle the /start command."""
     welcome_text = (
@@ -11,7 +18,7 @@ async def start_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         "Usa /help per vedere i comandi disponibili.\n"
         "Usa /register per ricevere gli allarmi su questo dispositivo."
     )
-    await update.message.reply_text(welcome_text, parse_mode="Markdown")
+    await _reply(update, welcome_text)
 
 
 async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -24,7 +31,7 @@ async def help_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         "/register - Registra questo dispositivo per ricevere gli allarmi\n"
         "/chatid   - Mostra l'ID di questa chat"
     )
-    await update.message.reply_text(help_text, parse_mode="Markdown")
+    await _reply(update, help_text)
 
 
 async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -34,16 +41,13 @@ async def status_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "Sto recuperando gli ultimi dati dal Digital Twin...\n"
         "_(Nota: qui inseriremo i dati reali recuperati da MongoDB)_"
     )
-    await update.message.reply_text(status_text, parse_mode="Markdown")
+    await _reply(update, status_text)
 
 
 async def chatid_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle the /chatid command — mostra il chat ID senza registrare."""
-    await update.message.reply_text(
-        f"Il tuo Chat ID è: `{update.effective_chat.id}`\n\n"
-        "Usa /register per registrarti alla ricezione degli allarmi.",
-        parse_mode="Markdown",
-    )
+    chat_id = update.effective_chat.id if update.effective_chat else "unknown"
+    await _reply(update, f"Il tuo Chat ID è: `{chat_id}`\n\nUsa /register per registrarti alla ricezione degli allarmi.")
 
 
 async def register_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -53,36 +57,24 @@ async def register_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     Salva il chat_id dell'utente in MongoDB tramite il NotificationService
     iniettato in bot_data da app.py.
     """
-    chat_id = str(update.effective_chat.id)
+    chat_id = str(update.effective_chat.id if update.effective_chat else "unknown")
     notification_service = context.application.bot_data.get("notification_service")
 
     if not notification_service:
-        await update.message.reply_text(
-            "⚠️ Servizio notifiche non disponibile. Riprova più tardi."
-        )
+        await _reply(update, "⚠️ Servizio notifiche non disponibile. Riprova più tardi.")
         return
 
     registered = notification_service.register_user(chat_id)
 
     if registered:
-        await update.message.reply_text(
-            "✅ *Registrazione completata!*\n\n"
-            "Riceverai notifiche automatiche in caso di allarmi sismici, "
-            "termici o di qualità dell'aria rilevati dai sensori sull'Etna.",
-            parse_mode="Markdown",
-        )
+        await _reply(update, "✅ *Registrazione completata!*\n\nRiceverai notifiche automatiche in caso di allarmi sismici, termici o di qualità dell'aria rilevati dai sensori sull'Etna.")
     else:
-        await update.message.reply_text(
-            "ℹ️ Sei già registrato per la ricezione degli allarmi.",
-            parse_mode="Markdown",
-        )
+        await _reply(update, "ℹ️ Sei già registrato per la ricezione degli allarmi.")
 
 
 async def unknown_text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle unrecognized text."""
-    await update.message.reply_text(
-        "⚠️ Questo bot accetta solo comandi specifici. Usa /help per la lista."
-    )
+    await _reply(update, "⚠️ Questo bot accetta solo comandi specifici. Usa /help per la lista.")
 
 
 async def send_push_notification(application, chat_id: str, message: str) -> None:

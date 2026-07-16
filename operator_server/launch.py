@@ -20,10 +20,10 @@ def receive_payload():
         except Exception:
             print("conversion did't work")
             message = payload.get("message")
-        with open("payload.txt", "a") as fl:
-            fl.write(f"service: {payload.get("service")}\n")
-            fl.write(f"status: {payload.get("service_status")}\n")
-            fl.write(f"message: {message}\n\n\n")
+            with open("payload.txt", "a") as fl:
+                fl.write(f"service: {payload.get("service")}\n")
+                fl.write(f"status: {payload.get("service_status")}\n")
+                fl.write(f"message: {message}\n\n\n")
     
         print("-----------------------------")
     else:

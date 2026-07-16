@@ -73,20 +73,12 @@ class NotificationService:
 
     def send_alarm(
         self,
-        sensor_id:  str,
-        gateway_id: str,
-        value:      Optional[float],
-        threshold:  Optional[float],
         message:    str,
     ) -> None:
         """
         Invia un messaggio di allarme a tutti gli utenti registrati.
 
         Args:
-            sensor_id:  ID fisico del sensore (es. "A4CF12F5A331-s1").
-            gateway_id: ID del gateway (MAC address).
-            value:      Valore letto dal sensore.
-            threshold:  Soglia critica configurata.
             message:    Messaggio descrittivo dal gateway (es. "CRITICAL: Seismic anomaly...").
         """
         if not self.telegram_app:
@@ -103,7 +95,7 @@ class NotificationService:
             logger.warning("Nessun utente registrato — allarme non inviato")
             return
 
-        alarm_text = self._build_alarm_message(sensor_id, gateway_id, value, threshold, message)
+        alarm_text = self._build_alarm_message(message)
 
         for chat_id in chat_ids:
             try:
@@ -121,26 +113,15 @@ class NotificationService:
 
     @staticmethod
     def _build_alarm_message(
-        sensor_id:  str,
-        gateway_id: str,
-        value:      Optional[float],
-        threshold:  Optional[float],
         message:    str,
     ) -> str:
         """
         Costruisce il testo del messaggio di allarme.
         """
         ts    = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S UTC")
-        value_str     = f"{value:.3f}" if value is not None else "N/D"
-        threshold_str = f"{threshold:.1f}" if threshold is not None else "N/D"
-
         return (
             "🚨 *ALLARME — Vulcano Etna*\n\n"
             f"🔴 *{message}*\n\n"
-            f"📡 Gateway:  `{gateway_id}`\n"
-            f"🔩 Sensore:  `{sensor_id}`\n"
-            f"📊 Valore:   `{value_str}`\n"
-            f"⚠️ Soglia:   `{threshold_str}`\n"
             f"🕐 Orario:   `{ts}`\n\n"
             "_Questo è un messaggio automatico del sistema di monitoraggio._"
         )

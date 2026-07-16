@@ -21,14 +21,21 @@ from cloud_platform.types.edge import ServiceResult
 from cloud_platform.services.base import BaseService
 from cloud_platform.services.base import BaseService
 from cloud_platform.services.database_service import DatabaseService
-
+from dataclasses import dataclass
     
     
     
 logger = logging.getLogger(__name__)
 
+UNIT_MAP_ANALYTICS = {
+    "t1": "°C", 
+    "t2": "°C",
+    "t3": "°C",
+    "aq1": "ppm", # for C02
+    "aq2": "ppb", # for SO2
+    "s1": "m/s^2",
+}
 
-from dataclasses import dataclass
 
 @dataclass
 class CustomError(Exception):
@@ -279,7 +286,7 @@ class AlertingService(BaseService):
     def __init__(self, config: Dict = {}):
         super().__init__(config)
         self.inform = {
-            1: ["WEBHOOK_ALERT", "ON_FIELD_ALARMS"],
+            1: ["WEBHOOK_ALERT", "ON_FIELD_ALARMS", "TELEGRAM"],
             2: ["WEBHOOK_ALERT"]
         }
 
@@ -314,14 +321,11 @@ class AlertingService(BaseService):
                     if alert_level == "critical":
                         critical_count += 1
                         self.priority = 1
+                        unit : str = UNIT_MAP_ANALYTICS.get(dr.get("device_type"), "")
                         single_dr_msg += f"\tCRITICAL -- device ID: {device_id}"\
-                            f"\t value: {current_value}"\
-                            f"\t threshold: {threshold}\n"
-                        # raise CustomError(message=single_dr_msg)
-                        
-                    # single_dr_msg += f"\n\n\tdevice ID: {device_id}"\
-                    #         f"\t value: {current_value}"\
-                    #         f"\t threshold: {threshold}"   
+                            f"\t value: {current_value} {unit}"\
+                            f"\t threshold: {threshold} {unit}\n"
+  
                 except AttributeError:
                     logger.warning("Skipping DR with missing device_id.")
                     continue

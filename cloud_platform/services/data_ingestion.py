@@ -53,7 +53,7 @@ UNIT_MAP = {
     "t3": "°C",
     "aq1": "ppm", # for C02
     "aq2": "ppb", # for SO2
-    "s1": "m/s",
+    "s1": "m/s^2",
 }
 
 def _find_dr(db_service: DatabaseService, device_id: str) -> Optional[Dict]:

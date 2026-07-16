@@ -1,4 +1,4 @@
-from flask import Flask, jsonify
+from flask import Flask
 from flask_cors import CORS
 from config.config import Config
 import asyncio
@@ -11,6 +11,7 @@ import requests
 from cloud_platform.application.operator_api import register_operator_routes
 from cloud_platform.application import client_http
 from cloud_platform.telegram_bot.routes.webhook_routes import init_routes
+from cloud_platform.services.notification_service import NotificationService
 
 # - Queue imports
 import queue
@@ -79,13 +80,19 @@ class TelegramBot:
     def _setup_handlers(self):
         # Importa i nuovi handler
         from cloud_platform.telegram_bot.handlers.bot_handlers import (
-            start_handler, help_handler, status_handler, chatid_handler, unknown_text_handler
+            start_handler,
+            help_handler,
+            status_handler,
+            chatid_handler,
+            register_handler,
+            unknown_text_handler,
         )
 
         self.application.add_handler(CommandHandler("start", start_handler))
         self.application.add_handler(CommandHandler("help", help_handler))
         self.application.add_handler(CommandHandler("status", status_handler))
         self.application.add_handler(CommandHandler("chatid", chatid_handler))
+        self.application.add_handler(CommandHandler("register", register_handler))
         
         # Sostituisce l'echo_handler: risponde a qualsiasi testo che non sia un comando
         self.application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, unknown_text_handler))
@@ -329,7 +336,8 @@ class GatewayPoller:
         while not self._stop_event.is_set():
             try:
 
-                results = client_http.poll_gateways()
+                results: dict = client_http.poll_gateways()
+                logger.info("results = %s", len(results.get("body", [])))
 
                 self.ingestion_queue.put(IngestionQueueItem(priority=2, 
                                                             item={ "edge_results": results,
@@ -444,13 +452,23 @@ class DispatchWorker(threading.Thread):
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to dispatch Webhook to {url}: {e}")
 
-    @staticmethod
-    def _send_telegram(url, payload: dict):
-        pass
+    def _send_telegram(self, payload: dict):
+        if self.notification_service is None:
+            logger.warning("Telegram notification service not configured")
+            return
+
+        try:
+            message = payload.get("message", "alarm")
+            self.notification_service.send_alarm(
+                message=message,
+            )
+            logger.info("Telegram alert dispatched via notification service")
+        except Exception as exc:
+            logger.exception("Failed to dispatch Telegram alert: %s", exc)
     
     @staticmethod
     def _default(url, payload):
-        logger.error(f"invalid recipient from service {payload.get("service")}, _default called")
+        logger.error("invalid recipient from service %s, _default called", payload.get("service"))
 
     RECIPIENTS = {
         "TELEGRAM": _send_telegram,
@@ -459,11 +477,12 @@ class DispatchWorker(threading.Thread):
         "ON_FIELD_ALARMS": _send_webhook,
     }
     
-    def __init__(self, config: Config, dispatch_queue: queue.PriorityQueue, telegram_bot = None):
+    def __init__(self, config: Config, dispatch_queue: queue.PriorityQueue, telegram_bot=None, notification_service : NotificationService|None =None):
         super().__init__(daemon=True)
-        self.config : Config = config
+        self.config: Config = config
         self.dispatch_queue = dispatch_queue
         self.telegram_bot = telegram_bot
+        self.notification_service = notification_service
         self._URLS = {
             "WEBHOOK_OPERATOR": config.WEBHOOK_OPERATOR,
             "WEBHOOK_ALERT": config.WEBHOOK_OPERATOR, 
@@ -504,14 +523,16 @@ class DispatchWorker(threading.Thread):
         if item_dict.get("notify") is None:
             return
         for recipient in item_dict.get("notify"):
-            f = self.RECIPIENTS.get(recipient, self._default)
+            payload = {
+                "service": item_dict.get("service"),
+                "service_status": item_dict.get("status"),
+                "message": item_dict.get("message"),
+            }
 
-            payload = {"service":item_dict.get("service"),"service_status": item_dict.get("status"),
-                       "message": item_dict.get("message")}
-            
             if recipient == "ON_FIELD_ALARMS":
-                payload = {"command":"alarm", "buzzer": 1} # default payload to trigger all alarms
+                payload = {"command": "alarm", "buzzer": 1}  # default payload to trigger all alarms
 
+            f = self.RECIPIENTS.get(recipient, self._default)
             url = self._URLS.get(recipient)
             if isinstance(url, list):
                 for u in url:
@@ -621,10 +642,19 @@ if __name__ == "__main__":
         raise RuntimeError("DT_FACTORY not initialized on Flask app")
     if not server.app.config.get("INGESTION_QUEUE"):
         raise RuntimeError("INGESTION_QUEUE not initialized on Flask app")
+
+    if telegram_bot is not None:
+        notification_service = NotificationService(
+            db_service=server.app.config["DB_SERVICE"],
+            telegram_app=telegram_bot.application,
+        )
+        telegram_bot.application.bot_data["notification_service"] = notification_service
+        server.app.config["NOTIFICATION_SERVICE"] = notification_service
     
     dispatch_worker = DispatchWorker(
         config=cfg,
         dispatch_queue=server.app.config.get("DISPATCH_QUEUE"),
+        notification_service=server.app.config.get("NOTIFICATION_SERVICE"),
     )
     dispatch_worker.start()
     
@@ -665,7 +695,7 @@ if __name__ == "__main__":
             host=cfg.FLASK_HOST,
             port=cfg.FLASK_PORT,
             debug=False,
-            application=telegram_bot.application if telegram_bot else None,
+            # application=telegram_bot.application if telegram_bot else None,
         )
     finally:
         logger.info("\n\nShutting down workers...")
