@@ -1,4 +1,4 @@
-//11_07_2026
+//17_07_2026
 
 /*
  * SENSORS.INO — Ciclo di vita del nodo IoT
@@ -44,7 +44,7 @@ const char* TOPIC_PUB_CMD  = "iot/sensors/cmd"; // Risposta a cmd_01 on-demand
 const char* TOPIC_SUB      = "iot/cmd";         // Ricezione comandi dal gateway
 
 // Timing: converte le macro da Config.h in variabili unsigned long
-const unsigned long SEND_INTERVAL   = SEND_INTERVAL_MS;   // Intervallo pubblicazione [ms]
+unsigned long SEND_INTERVAL   = SEND_INTERVAL_MS;   // Intervallo pubblicazione [ms]
 const unsigned long BUZZER_DURATION = BUZZER_DURATION_MS; // Durata LED acceso [ms]
 
 // =============================================================
@@ -240,6 +240,28 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       Serial.println("[BUZZER] Spento"); // Log spegnimento
     }
     return;                        // Comando gestito: esci dalla callback
+  }
+
+  if (strcmp(cmd, "mqtt_publication_interval") == 0) {
+    unsigned long newInterval = doc["interval"] | SEND_INTERVAL_MS;
+    String statusMsg = (newInterval >= 1000) ? "polling interval updated" : "error: interval too short";
+
+    if (newInterval >= 1000) {
+      SEND_INTERVAL = newInterval;
+      Serial.println("[CMD] Intervallo aggiornato -> " + String(SEND_INTERVAL) + " ms");
+    }
+
+    // Costruisce un JSON minimale che rispetta la struttura attesa dal Gateway
+    // Il gateway cerca l'array "responses", quindi dobbiamo mantenerlo
+    String json = "{\"responses\":[{\"message\":\"" + statusMsg + "\"}]}";
+
+    mqtt.publish(TOPIC_PUB_CMD, json.c_str());
+    return;
+  }
+
+    // Pubblica la conferma sul topic dei comandi (lo stesso usato da cmd_01)
+    mqtt.publish(TOPIC_PUB_CMD, json.c_str());
+    return;
   }
 
   // Comando non riconosciuto: log di avviso

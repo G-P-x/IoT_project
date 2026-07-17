@@ -1,4 +1,4 @@
-//11_07_2026
+//17_07_2026
 
 /*
  * CONFIG.H — File di configurazione del nodo IoT

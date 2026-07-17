@@ -1,4 +1,4 @@
-#11_07_2026
+#17_07_2026
 """
 GatewayCode.py — Gateway IoT per il monitoraggio vulcanico
 ===========================================================
@@ -231,10 +231,10 @@ def receive_command():
 
     command = cmd.get("command", "")              # Estrae il campo "command" dal JSON
 
-    if command == "cmd_01":                        # Comando di lettura on-demand?
-        with _lock:                               # Acquisisce il mutex per thread-safety
-            _cmd_response = []                    # Svuota il buffer della risposta precedente
-        _cmd_event.clear()                        # Resetta l'Event (non segnalato)
+    if command in ["cmd_01", "mqtt_publication_interval"]:  # Attendi risposta per questi comandi                        # Comando di lettura on-demand?
+        with _lock:                                         # Acquisisce il mutex per thread-safety
+            _cmd_response = []                              # Svuota il buffer della risposta precedente
+        _cmd_event.clear()                                  # Resetta l'Event (non segnalato)
 
         _mqtt_client.publish(TOPIC_PUB, json.dumps(cmd))  # Pubblica il comando su iot/cmd
         print(f"[MQTT OUT] {TOPIC_PUB} -> {cmd}")
