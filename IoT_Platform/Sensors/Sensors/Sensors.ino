@@ -251,16 +251,18 @@ void mqttCallback(char* topic, byte* payload, unsigned int length) {
       Serial.println("[CMD] Intervallo aggiornato -> " + String(SEND_INTERVAL) + " ms");
     }
 
-    // Costruisce un JSON minimale che rispetta la struttura attesa dal Gateway
-    // Il gateway cerca l'array "responses", quindi dobbiamo mantenerlo
+    // Costruisci il JSON
     String json = "{\"responses\":[{\"message\":\"" + statusMsg + "\"}]}";
 
-    mqtt.publish(TOPIC_PUB_CMD, json.c_str());
-    return;
-  }
+    // PUBBLICAZIONE OBBLIGATORIA PER SBLOCCARE IL GATEWAY
+    Serial.println("[CMD] Invio risposta su " + String(TOPIC_PUB_CMD) + "...");
+    bool success = mqtt.publish(TOPIC_PUB_CMD, json.c_str());
 
-    // Pubblica la conferma sul topic dei comandi (lo stesso usato da cmd_01)
-    mqtt.publish(TOPIC_PUB_CMD, json.c_str());
+    if (success) {
+      Serial.println("[CMD] Risposta inviata con successo.");
+    } else {
+      Serial.println("[CMD] ERRORE: Pubblicazione fallita!");
+    }
     return;
   }
 
