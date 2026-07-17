@@ -1,5 +1,6 @@
 import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from bson import timestamp
 import requests
 from config.config import Config
 from datetime import datetime, timezone
@@ -328,6 +329,71 @@ def poll_gateways():
 
     return results
 
+def _change_polling_interval(url, new_interval: int) -> dict:
+    """
+    Change the polling interval for the edge devices.
+    This method updates the local configuration and also notifies the edge devices of the new interval.
+
+    Args:
+        new_interval: The new polling interval in milliseconds.
+    """
+    try:
+        ms_interval = new_interval*1000  # Convert milliseconds to seconds for the edge device
+        resp = requests.post(url, json={"command": "mqtt_publication_interval", "interval": ms_interval}, timeout=10)
+        resp.raise_for_status()
+        # [
+        #     {
+        #         "record": {
+        #             "message": "polling interval updated"
+        #         },
+        #         "time_stamp": "2026-07-17T14:02:14.555Z"
+        #     }
+        # ]
+        message = resp.json()[0].get("record", {}).get("message", "No message returned")
+        logger.info("\n\n\tHTTP change_polling_interval → %s  response: %s – %s\n\n", url, resp.status_code, resp.text)
+        return {"status": "success", "code": resp.status_code, "req_timestamp": datetime.now(timezone.utc).isoformat(), "message": message}
+    
+    except requests.RequestException as e:
+        logger.error("HTTP poll → %s failed: %s", url, e)
+        return {"status": "error", "code": FAILED_REQUEST_CODE, "error": str(e), "req_timestamp": datetime.now(timezone.utc).isoformat()}
+    
+def change_polling_interval(new_interval: int) -> dict:
+    """
+    Change the polling interval for the edge devices.
+    This method updates the local configuration and also notifies the edge devices of the new interval.
+
+    Args:
+        new_interval: The new polling interval in milliseconds.
+    """
+    results = {}
+    try:
+        with ThreadPoolExecutor(max_workers=len(cfg.EDGE_DEVICES) or 1) as executor:
+        # Submit one polling task per  gateway
+            future_to_gateway = {
+                executor.submit(_change_polling_interval, f"{url}{cfg.COMMAND_ENDPOINT}", new_interval): gateway_id
+                for gateway_id, url in cfg.EDGE_DEVICES.items()
+            }
+        # Collect results as they complete
+        for future in as_completed(future_to_gateway):
+            gateway_id = future_to_gateway[future]
+            try:
+                results[gateway_id] = future.result() # Waits for the asynchronous task to complete (_poll_gateway) and retrieves its result. 
+                # {
+                #     gateway_id: {
+                #         status": result.get("status"),
+                #         "code": result.get("code"),
+                #         "req_timestamp": result.get("req_timestamp"),
+                #         "body": result.get("body") if result.get("status") == "success"
+                # }
+            except Exception as e:
+                # print(f"Error polling gateway {gateway_id}: {e}")
+                logger.error("Polling gateway '%s' failed: %s", gateway_id, str(e))
+                results[gateway_id] = {"status": "error", "code": FAILED_REQUEST_CODE, "error": str(e), "req_timestamp": datetime.now(timezone.utc).isoformat()}
+    except Exception as e:
+        logger.error("Failed to change polling interval: %s", str(e))
+        results = {"status": "error", "code": FAILED_REQUEST_CODE, "error": str(e), "req_timestamp": datetime.now(timezone.utc).isoformat()}
+       
+    return results
 
 def test():
     import json as json_module

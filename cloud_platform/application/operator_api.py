@@ -1,5 +1,6 @@
 from flask import Blueprint, current_app, jsonify, request
 from flask import render_template
+import requests
 from cloud_platform.types.edge import EdgeResults, DeviceResult
 from cloud_platform.application import client_http
 from pydantic import BaseModel, ValidationError
@@ -35,8 +36,24 @@ class CommandDispatcher:
         self.client = client_http
         self.commands_map = {
             "cmd_01": self._send_command_to_sensors,
+            "mqtt_publication_interval": self._change_polling_interval,
             # "cmd_02": self._send_command_to_actuators # da eliminare (matteo implementa la logica di attivazione dell'allarme localmente)
         }
+
+    def _change_polling_interval(self, new_interval: int) -> str:
+        """
+        Change the polling interval for the edge devices.
+        This method updates the local configuration and also notifies the edge devices of the new interval.
+        """
+        # Notify edge devices of the new polling interval
+        gateway_url = current_app.config.get("GATEWAY_URL", "http://127.0.0.1:8080")
+        response = requests.post(
+            f"{gateway_url}/poll_interval",
+            json={"poll_interval": new_interval},
+            timeout=5
+        )
+        response.raise_for_status()
+        logger.info("Gateway notified: %s", response.text)
 
     def send_command(self, command: str, target: dict[str, list[str]]) -> dict:
         """
@@ -73,6 +90,23 @@ class CommandDispatcher:
         }
         """
         # Discriminate command type and call the appropriate handler
+        if command == "mqtt_publication_interval":
+            if not target.get("poll_interval"):
+                return {"status": "error", "message": "Missing 'poll_interval' in target"}
+            new_interval : str = target.get("poll_interval")[0]
+            if new_interval is None:
+                return {"status": "error", "message": "Missing 'poll_interval' in target"}
+            try:
+                new_interval: int = int(new_interval)
+            except ValueError:
+                return {"status": "error", "message": "'poll_interval' must be an integer"}
+            results : dict = self.client.change_polling_interval(new_interval)
+            if results.get("status") == "error":   
+                return {"status": "error", "message": "Failed to change polling interval"}
+            else:
+                return results
+        
+
         f = self.commands_map.get(command)
         response = f(command, target) if f else None
         if isinstance(response, str):
@@ -130,27 +164,32 @@ bp_operator = Blueprint("operator_api", __name__, url_prefix="/operator")
 def home():
     return jsonify({"message": "Welcome to the Operator API. Use /operator/history/<parameter> to view telemetry history and /operator/commands/send to send commands to the DT."})
 
-@bp_operator.route("/change_poll_interval", methods=["PUT"])
+@bp_operator.route("/change_DT_poll_interval", methods=["PUT"])
 def commands():
     # Retrieve the JSON data from the request body
     data = request.get_json()
     try:
-        new_interval = int(data.get("poll_interval"))
-        logger.info(f"new poll interval arrived: {new_interval}")
-        result = current_app.config["GATEWAY_POLLER"].update_interval(new_interval)
+        # local polling interval update
+        operator_id = str(data.get("operator_id")).lower()
+        new_interval : str = data.get("poll_interval")
+        logger.info(f"\n\t{operator_id} changed poll interval to: {new_interval}\n")
+        result = current_app.config["GATEWAY_POLLER"].update_interval(int(new_interval))       
+
+        # Notify edge devices of the new polling interval
+        edge_results = dispatcher.send_command(command="mqtt_publication_interval", target={"poll_interval": [new_interval]})
+        logger.info(f"Edge devices notified of new polling interval: {edge_results}")
+        result += f"\nEdge devices notified of new polling interval: {edge_results}" 
     except ValueError as e:
         logger.error(e)
         return jsonify({
             "status":"error",
             "message":"invalid"
         }), 400
-
     # Return a success response
     return jsonify({
         "status": "success",
         "message": result,
     }), 200
-
 
 @bp_operator.route("/history", methods=["POST"])
 def query_history():
@@ -249,6 +288,7 @@ def send():
         return jsonify({"status": "error", "message": "Missing JSON body"}), 400
     command_id = str(data.get("command_id")).lower()
     operator_id = str(data.get("issued_by")).lower()
+    
     target = dict(data.get("target"))
 
     # Dispatch the command to the appropriate edge devices
