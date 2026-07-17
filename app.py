@@ -241,11 +241,12 @@ class IngestionWorker:
         }
     )
     '''
-    def __init__(self, db_service, dt_factory, ingestion_queue: queue.PriorityQueue, service_queue: queue.Queue):
+    def __init__(self, db_service, dt_factory, ingestion_queue: queue.PriorityQueue, service_queue: queue.Queue, bot_data=None):
         self.db_service = db_service
         self.dt_factory = dt_factory
         self.ingestion_queue = ingestion_queue
         self.service_queue = service_queue
+        self.bot_data = bot_data
         self._stop_event = threading.Event()
         self._thread = threading.Thread(target=self._run, daemon=True)
 
@@ -281,6 +282,13 @@ class IngestionWorker:
                 )
                 
                 self.ingestion_queue.task_done()
+
+                if self.bot_data is not None:
+                    try:
+                        latest_dt_doc = self.dt_factory.get_dt(self.dt_factory.dt_id)
+                        self.bot_data["latest_dt_doc"] = latest_dt_doc
+                    except Exception:
+                        logger.exception("Failed to refresh latest digital twin snapshot")
 
                 self.service_queue.put(ServiceQueueItem(command_id="RUN SERVICE", dt_data=dt_data))
             except Exception as exc:
@@ -672,11 +680,16 @@ if __name__ == "__main__":
     )
     service_worker.start()
 
+    if telegram_bot is not None:
+        telegram_bot.application.bot_data["dt_factory"] = server.app.config["DT_FACTORY"]
+        telegram_bot.application.bot_data["db_service"] = server.app.config["DB_SERVICE"]
+
     ingestion_worker = IngestionWorker(
         db_service=server.app.config.get("DB_SERVICE"),
         dt_factory=server.app.config.get("DT_FACTORY"),
         ingestion_queue=server.app.config.get("INGESTION_QUEUE"),
-        service_queue=server.app.config.get("SERVICE_QUEUE")
+        service_queue=server.app.config.get("SERVICE_QUEUE"),
+        bot_data=telegram_bot.application.bot_data if telegram_bot is not None else None,
     )
     ingestion_worker.start()
     
